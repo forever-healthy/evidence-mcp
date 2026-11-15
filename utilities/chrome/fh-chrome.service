@@ -1,0 +1,18 @@
+# The real-Chrome stage of evidence-mcp as a user service (see chrome.md).
+#   mkdir -p ~/.config/systemd/user && cp utilities/chrome/fh-chrome.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now fh-chrome
+# Adjust ExecStart to where the repo lives. Logs: ~/.fh-chrome/chrome.sh.log
+[Unit]
+Description=evidence-mcp: Google Chrome with its own profile and DevTools port 9222
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/Development/evidence-mcp-dev/utilities/chrome/chrome.sh
+Restart=always
+RestartSec=3
+# Environment=CHROME_PROFILE=%h/.fh-chrome CHROME_PORT=9222
+
+[Install]
+WantedBy=graphical-session.target

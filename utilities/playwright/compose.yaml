@@ -1,0 +1,28 @@
+# One browser stage of evidence-mcp's download (see Dockerfile).
+#
+#   cp .env.example .env      # BIND_IP: 127.0.0.1 next to the server, the
+#                             # tailnet IP on a residential host
+#   docker compose up -d --build
+#
+# Or from the project: ../deploy.sh up (every FH_PLAYWRIGHT_n host, local or SSH).
+# Then point the server at it: FH_PLAYWRIGHT_1=127.0.0.1 (or the
+# host's name) in the server's .env; config.json lists the stages in order.
+services:
+  playwright:
+    build: .
+    image: ${IMAGE:-playwright-server:local}
+    container_name: ${CONTAINER:-playwright-server}   # deploy.sh: <prefix>playwright-server-<port>
+    restart: unless-stopped
+    init: true                 # reap Chromium children
+    # Published ONLY where stated: the server has no auth of its own.
+    # The same port inside as outside: a firewall rule names the container's
+    # port (matched after Docker's DNAT), so a project's own range covers its servers.
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${PORT:-8932}:${PORT:-8932}"
+    command: ["xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24", "playwright-core", "run-server", "--port", "${PORT:-8932}", "--host", "0.0.0.0"]
+    shm_size: 1gb              # Chromium needs shared memory; 64M crashes tabs
+    mem_limit: ${MEM_LIMIT:-4g}
+    pids_limit: 2048
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

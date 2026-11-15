@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "evidence-mcp": {
+      "command": "npx",
+      "args": ["-y", "evidence-mcp@latest"],
+      "env": {}
+    }
+  }
+}

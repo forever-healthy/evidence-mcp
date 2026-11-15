@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.forever-healthy/evidence-mcp",
+  "title": "Forever Healthy Evidence MCP",
+  "description": "Power tools for AI agents to improve and speed up medical literature research",
+  "websiteUrl": "https://github.com/forever-healthy/evidence-mcp",
+  "repository": {
+    "url": "https://github.com/forever-healthy/evidence-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "evidence-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

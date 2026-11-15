@@ -1,0 +1,22 @@
+# The fetch-proxy stage of evidence-mcp (see Dockerfile).
+#
+# From the project: ../deploy.sh up (every FH_FETCH_PROXY_n host with
+# FH_DEPLOY_FETCH_PROXY_n=true, local or SSH). Then the server reaches it as
+# FH_FETCH_PROXY_1=<host>:<port>.
+services:
+  fetch-proxy:
+    build: .
+    image: ${IMAGE:-fetch-proxy:local}
+    container_name: ${CONTAINER:-fetch-proxy}   # deploy.sh: <prefix>fetch-proxy-<port>
+    restart: unless-stopped
+    # Published ONLY where stated: an open forward proxy lends this IP to anyone.
+    # The same port inside as outside, as for a Playwright server: a firewall
+    # rule names the container's port (matched after Docker's DNAT).
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${PORT:-8888}:${PORT:-8888}"
+    environment:
+      PORT: ${PORT:-8888}
+    mem_limit: ${MEM_LIMIT:-128m}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
