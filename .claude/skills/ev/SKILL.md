@@ -76,7 +76,7 @@ Works on any text document (Markdown, HTML, plain text). [file] as in General Ru
   - `Abstract`: 🟢 if `has_abstract` is true, 🔴 if false (a title-only record: letter, editorial, old paper); `N/A` for a drug label or a trial record, which has none
   - `Full Text`: 🟢 if `level` is `full_text`, 🔴 if `abstract` or `title`
   - `Citable`: 🟢 if `citable` is true, 🔴 if false (retracted, or nothing to read)
-  - `Comment`: the status's `comment` verbatim when not null. Add `preprint` when `publication_types` contains `Preprint`; `accepted manuscript` (or the `version` value with the `year`, e.g. a label's `spl 52`) when `Full Text` is 🟢 and `version` is not `published`; for a trial record `updated <version>` and, when `publications` is not empty, `results: ` with its IDs; for a `doi:` source `not in PubMed` when `pmid` is null, else `in PubMed as pmid:<PMID>`. Otherwise empty. A 🔴 in `Abstract` or `Full Text` needs no comment: paywalls are normal, and the sources tried are in the library's log
+  - `Comment`: the status's `comment` verbatim when not null. Add `preprint` when `publication_types` contains `Preprint`; when `Full Text` is 🟢 and `version` is not `published`, the version in words, no year: `accepted manuscript`, `preprint`, or the value as it is (a label's `spl 52`); for a trial record `updated <version>` and, when `publications` is not empty, `results: ` with its IDs; for a `doi:` source `not in PubMed` when `pmid` is null, else `in PubMed as pmid:<PMID>`. Otherwise empty. A 🔴 in `Abstract` or `Full Text` needs no comment: paywalls are normal, and the sources tried are in the library's log
   - A status with an `error` (e.g. `pmid not found`): `ID` filled, `Abstract`, `Full Text` and `Citable` 🔴, the error in `Comment`
 
 * Write [sources_file]:

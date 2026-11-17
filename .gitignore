@@ -5,3 +5,6 @@ dist/
 evidence/*
 tui/.venv/
 __pycache__/
+# /ev outputs
+samples/*_sources.md
+samples/*_claims.md

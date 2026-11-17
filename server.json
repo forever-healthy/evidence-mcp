@@ -8,12 +8,12 @@
     "url": "https://github.com/forever-healthy/evidence-mcp",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "1.0.16",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "evidence-mcp",
-      "version": "0.1.0",
+      "version": "1.0.16",
       "transport": {
         "type": "stdio"
       }
