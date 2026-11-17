@@ -65,7 +65,7 @@ from textual.widgets import Input, Log, Select, Static  # noqa: E402
 
 NULL = getattr(Select, "NULL", getattr(Select, "BLANK", None))  # the "no selection" sentinel
 
-TUI_VERSION = 212   # plain counter: bump on every change to tui/
+TUI_VERSION = 213   # plain counter: bump on every change to tui/
 REPO_ROOT = Path(__file__).resolve().parents[1]   # this checkout: git pull, the TUI's own version and files
 CTL_PATH = Path(__file__).resolve()
 CWD = Path.cwd()                                   # the caller's project: its .env and its library (run.sh keeps it)
@@ -1211,8 +1211,8 @@ class Ctl(App):
     }
     #status-bar { height: 16; background: transparent; }
     #status-divider { width: 1fr; height: 1; padding: 0 1; color: #4e4e4e; background: transparent; text-wrap: nowrap; text-overflow: clip; }
-    #status-row-server, #status-row-fh_verify_claim, #status-row-websearch, #status-row-1, #status-row-verify, #status-row-unlocker, #status-row-proxy, #status-row-playwright, #status-row-chrome, #status-row-2, #status-row-3, #status-row-doi, #status-row-4, #status-row-5, #status-row-url, #status-row-verdicts, #status-row-search { height: 1; background: transparent; }
-    #row-verify, #row-unlock, #row-websearch, #row-proxy, #row-playwright, #row-chrome { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
+    #status-row-server, #status-row-fh_verify_claim, #status-row-websearch, #status-row-1, #status-row-verify, #status-row-unlocker, #status-row-fetch, #status-row-playwright, #status-row-chrome, #status-row-2, #status-row-3, #status-row-doi, #status-row-4, #status-row-5, #status-row-url, #status-row-verdicts, #status-row-search { height: 1; background: transparent; }
+    #row-verify, #row-unlock, #row-websearch, #row-fetch, #row-playwright, #row-chrome { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-doi { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-pmid, #row-dailymed { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-nct, #row-url, #row-verdicts, #row-search { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
@@ -1334,8 +1334,8 @@ class Ctl(App):
                 yield Static(f"v{TUI_VERSION}", id="ver")
             with Horizontal(id="status-row-fh_verify_claim"):   # the decision model behind fh_verify_claim, and whether it answers
                 yield Static("decider  …", id="row-verify")
-            with Horizontal(id="status-row-proxy"):   # our own stage hosts, one line per kind, and whether each answers
-                yield Static("proxy     …", id="row-proxy")
+            with Horizontal(id="status-row-fetch"):   # our own stage hosts, one line per kind, and whether each answers
+                yield Static("fetch     …", id="row-fetch")
             with Horizontal(id="status-row-playwright"):
                 yield Static("playwright …", id="row-playwright")
             with Horizontal(id="status-row-chrome"):
@@ -1662,7 +1662,7 @@ class Ctl(App):
         self.query_one("#row-websearch", Static).update(w)
         # Our own stage hosts below, one line per kind: up or down, checked on every scan (free).
         sts = res.get("stages") or []
-        for kind, label, row in (("fetch-proxy", "proxy", "#row-proxy"), ("playwright", "playwright", "#row-playwright"), ("chrome", "chrome", "#row-chrome")):
+        for kind, label, row in (("fetch-proxy", "fetch", "#row-fetch"), ("playwright", "playwright", "#row-playwright"), ("chrome", "chrome", "#row-chrome")):
             g = Text(); g.append(f"{label:<10} ", style=C_TOOL)
             mine = [st for st in sts if st.get("name", "").startswith(kind + " ")]
             if not mine:
