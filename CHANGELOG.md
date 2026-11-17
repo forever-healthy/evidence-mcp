@@ -1,5 +1,9 @@
 # Forever Healthy Evidence MCP — Change Log
 
+### v1.0.17 — 2026-11-17
+
+* **Clearer setup hint for claim verification:** without a decision model the error names `FH_VERIFY_PROVIDER` and its API key, and `/ev verify` stops at once instead of filling a table of 🟡.
+
 ### v1.0.16 — 2026-11-17
 
 * **Support for Liquid AI:** its decision models (`d1-ultra`) for claim verification.

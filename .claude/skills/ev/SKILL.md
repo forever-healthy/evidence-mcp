@@ -106,6 +106,8 @@ Works on any text document. [file] as in General Rules; [claims_file] is [file] 
 
 * Report: `verify: [file]`
 
+* Call `fh_info`. When its `verify` is null, no decision model is configured: report `No decision model configured — set FH_VERIFY_PROVIDER and its API key in .env (README → Decider Model).` and stop; write no table. When `verify.ok` is false, report `Decision model not reachable: <verify.error>` and stop.
+
 * Read [file]. Skip front matter, the reference list and text inside HTML comments.
 
 * Extract the claims. A claim is a statement of fact the document backs with a citation: a link or mention of a library source (PubMed, DOI, DailyMed, ClinicalTrials.gov — the same sources and IDs as `/ev ingest`). For each cited sentence:

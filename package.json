@@ -1,6 +1,6 @@
 {
   "name": "evidence-mcp",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "Power tools for AI agents to improve and speed up medical literature research",
   "type": "module",
   "bin": {

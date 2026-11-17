@@ -225,7 +225,7 @@ export async function verifyClaim(claim: string, id: string, cfg: VerifyConfig |
   const paper = await read(id);
   out.id = paper.id;
   if ("error" in paper) return { ...out, error: paper.error };
-  if (!cfg || !decide) return { ...out, error: "no verify model configured (FH_VERIFY_URL)" };
+  if (!cfg || !decide) return { ...out, error: "no decision model configured: set FH_VERIFY_PROVIDER and its API key in .env" };
   out.basis = paper.basis;
   out.glyphs_unresolved = countUnresolved(paper.text);
   if (paper.basis === "title") return { ...out, verdict: "fail", reason: NOTHING_TO_VERIFY };

@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/badge/Version-1.0.16-green.svg)
+![Version](https://img.shields.io/badge/Version-1.0.17-green.svg)
 ![License MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 [![Forever Healthy](https://img.shields.io/badge/(c)_2026-Forever_Healthy-573D7D.svg)](https://forever-healthy.org)
 [![npm](https://img.shields.io/badge/npm-evidence--mcp-cb3837.svg)](https://www.npmjs.com/package/evidence-mcp)

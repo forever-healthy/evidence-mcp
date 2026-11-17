@@ -132,7 +132,7 @@ export function noticeTag(m: Meta): string {
 // one place regardless of how the server is started.
 // A verify error that is the model's, not the claim's: no model configured, or
 // the request to it failed (HTTP error, timeout, no answer) — logged as "!!".
-const modelFailure = (error: string, cfg: { model: string } | null) => error.startsWith("no verify model configured") || (!!cfg && error.startsWith(`${cfg.model}:`));
+const modelFailure = (error: string, cfg: { model: string } | null) => error.startsWith("no decision model configured") || (!!cfg && error.startsWith(`${cfg.model}:`));
 
 export function registerTools(server: McpServer): void {
   // IDs are "type:value" (pmid:30955454, doi:10.…, pmc:PMC…, nct:NCT…); bare
