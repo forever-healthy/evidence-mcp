@@ -18,7 +18,13 @@ const ACCOUNT = new Set([401, 402, 403, 429]);
 
 type Answer = { statusCode?: number; httpResponseBody?: string; httpResponseHeaders?: { name: string; value: string }[]; title?: string; detail?: string };
 
+// A timeout reads "timeout", as Bright Data and the fetch stages say it (not "The operation was aborted due to timeout").
 export async function get(url: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<Unlocked> {
+  try { return await request(url, fetchImpl, signal); }
+  catch (e) { throw (e as Error)?.name === "TimeoutError" ? new Error("timeout") : e; }
+}
+
+async function request(url: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<Unlocked> {
   const key = process.env.FH_ZYTE_API_KEY?.trim();
   if (!key) throw new Error("not configured");
   const r = await fetchImpl("https://api.zyte.com/v1/extract", {

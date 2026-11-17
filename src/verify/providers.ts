@@ -1,4 +1,5 @@
 import { google } from "./google.js";
+import { liquid } from "./liquid.js";
 import { openai } from "./openai.js";
 import { perplexity } from "./perplexity.js";
 
@@ -30,12 +31,12 @@ export type Provider = {
 
 // In order; the last one takes every URL the others do not claim (a local
 // Decider for Mac has no host name of its own).
-const PROVIDERS: Provider[] = [google, openai, perplexity];
+const PROVIDERS: Provider[] = [google, openai, liquid, perplexity];
 
 export const PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
 export const providerByName = (name: string): Provider | null => PROVIDERS.find((p) => p.name === name) ?? null;
 
-// A key alone names its provider (pplx-…; AIza… or AQ.…; sk-…): hosted, no URL needed.
+// A key alone names its provider (pplx-…; AIza… or AQ.…; sk-…; liquid_…): hosted, no URL needed.
 export const providerForKey = (key: string): Provider | null => PROVIDERS.find((p) => p.keyPrefixes.some((k) => key.startsWith(k))) ?? null;
 
 export function providerFor(baseUrl: string): Provider {

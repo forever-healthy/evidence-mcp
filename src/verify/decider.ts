@@ -51,7 +51,8 @@ export function decider(cfg: VerifyConfig, fetchFn: typeof fetch = fetch): Decid
         await new Promise((res) => setTimeout(res, RETRY_MS));
         continue;
       }
-      throw new Error(msg ? `${cfg.model}: ${msg}` : `${cfg.model}: HTTP ${r.status} without an answer`);
+      // The model's name once: LM Studio's messages already begin with it ("d1-2b: input … too large")
+      throw new Error(msg ? (msg.startsWith(`${cfg.model}: `) ? msg : `${cfg.model}: ${msg}`) : `${cfg.model}: HTTP ${r.status} without an answer`);
     }
   };
 }

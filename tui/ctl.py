@@ -11,7 +11,8 @@ Middle: <library>/logs/evidence.log, followed live (tail -F), coloured per field
         (verify lines: verdict green / red / yellow for pass / fail / unverifiable,
         basis coloured like a level, score in blue, "verdict=" / "basis=" / "score=" dropped);
         the date and the word "tier" are not shown; the client column (who made the
-        call: today the server's host name) is hidden with FH_TUI_SHOW_CLIENT=false
+        call: today the server's host name) is shown when the log has several clients
+        (FH_TUI_SHOW_CLIENT=true / false forces it)
         FH_TUI_PULL=1 (default 0 = off): the same pull at the start of every rescan,
         quiet unless something changed or failed; one pull at a time per checkout (a lock
         in .git), a second TUI on the same checkout skips its cycle — for a TUI that
@@ -64,7 +65,7 @@ from textual.widgets import Input, Log, Select, Static  # noqa: E402
 
 NULL = getattr(Select, "NULL", getattr(Select, "BLANK", None))  # the "no selection" sentinel
 
-TUI_VERSION = 172   # plain counter: bump on every change to tui/
+TUI_VERSION = 212   # plain counter: bump on every change to tui/
 REPO_ROOT = Path(__file__).resolve().parents[1]   # this checkout: git pull, the TUI's own version and files
 CTL_PATH = Path(__file__).resolve()
 CWD = Path.cwd()                                   # the caller's project: its .env and its library (run.sh keeps it)
@@ -136,9 +137,21 @@ STATUS_SECS = max(5, int(_dotenv("FH_TUI_STATUS_SECS") or 60))
 STATUS_PORT = int(_dotenv("FH_TUI_PORT") or 0)       # /status endpoint on 0.0.0.0; 0 = none
 PULL = (_dotenv("FH_TUI_PULL") or "").lower() in ("1", "true", "yes", "on")   # git pull at the start of each rescan
 # The client column: who made the call (today the server's host name; with a
-# shared server, the user). Hidden with FH_TUI_SHOW_CLIENT=false where there is
-# only one client and it only takes room.
-SHOW_CLIENT = (_dotenv("FH_TUI_SHOW_CLIENT") or "true").strip().lower() not in ("0", "false", "no", "off")
+# shared server, the user). FH_TUI_SHOW_CLIENT=true / false forces it; unset, it
+# is shown only when the log has more than one client — a single user's log has
+# one and the column only takes room, a fleet's has several (decided at start).
+def _log_clients(path: Path, tail_bytes: int = 2_000_000) -> int:
+    try:
+        with path.open("rb") as f:
+            f.seek(max(0, path.stat().st_size - tail_bytes))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return 0
+    return len({m.group(1) for m in re.finditer(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d (\S+) ", text, re.M)})
+
+
+_SHOW = (_dotenv("FH_TUI_SHOW_CLIENT") or "").strip().lower()
+SHOW_CLIENT = _SHOW not in ("0", "false", "no", "off") if _SHOW not in ("", "auto") else _log_clients(LOG_FILE) > 1
 PULL_BUSY = "another TUI is pulling this checkout — skipped"
 BIND_RETRY_SECS = 300    # a port that could not be bound is tried again this often
 LOG_TAIL_BYTES = 4 << 20  # how much of evidence.log the last-hour counts read
@@ -166,6 +179,7 @@ C_FAIL = "#ff5f5f"       # red
 C_WARN = "#ffd75f"       # yellow: abstract-only outcomes
 C_MUTE = "#6c6c6c"       # dim grey: skipped / exists / non-events
 C_URL = "#5fa8ff"
+C_REMOTE = "default"     # the terminal's own text colour, the light grey of the counts rows (papers, trials, drug labels): an answer from outside just now ("remote"), beside the steel-blue "cached"
 
 DATE = re.compile(r"^\d{4}-\d\d-\d\d (?=\d\d:\d\d:\d\d )")
 LINE = re.compile(r"^(?P<ts>(?:\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d) (?P<client>\S+) (?P<tool>\S+) +(?P<id>\S+) +(?P<msg>.*)$")
@@ -178,7 +192,7 @@ TOOL_WIDTH, ID_WIDTH, WORD_WIDTH = 7, 13, 18   # word 18: "done", "exists" line 
 # "tier <name> …" lines are shown without the word "tier" (see LibLog): the
 # amber name carries it. So a tier line is <name> followed by a tier outcome.
 TIER = re.compile(r"^(?P<name>[a-z][a-z0-9_-]*) +(?P<rest>(?:ok\b|failed\b|skipped\b|located\b|fetched\b|try\b|aborted\b|abandoned\b|redirect\b|pdf link\b|http upgraded\b|https?://|(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}/|\d+ text-mining).*)$")   # a URL with or without its scheme
-TIER_WORD = re.compile(r"^(\S+ \S+ \S+ \S+ +(?:\d+\.\ds +)?)(?:tier |verdict=)(?=\S)")
+TIER_WORD = re.compile(r"^(\S+ \S+ \S+ \S+ +(?:(?:\d+\.\ds|cached) +)?)(?:tier |verdict=)(?=\S)")   # "cached" in the time's place (1.0.3)
 # A URL in a log line: with its scheme, or — as the server writes them since
 # 2026-11-13 — without "https://": a host name with a dot, then a path.
 URL = re.compile(r"https?://\S+|(?<![\w@/.:-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}/\S*")
@@ -196,12 +210,12 @@ def short_url(u: str) -> str:
     if len(u) <= URL_MAX:
         return u
     return u[:URL_MAX - 1] + "…"
-HTTP = re.compile(r"HTTP [45]\d\d(?: [A-Z_]+)?")
+HTTP = re.compile(r"HTTP [45]\d\d(?: [A-Z_]+\b)?")
 LEVEL = re.compile(r"(?<![-\w])(full_text|abstract|title|missing)\b")   # "level=" is dropped on screen; the word is coloured
 RETRIEVED = re.compile(r"retrieved_by=\S+")
 # Both line formats: the current one, time first, and the earlier one that
 # starts with the verdict (lines written before 2026-11-05 stay in the log).
-VERDICT = re.compile(r"^(?:(?P<secs>\d+\.\ds) +)?(?:verdict=)?(?P<verdict>pass|fail|na|backed|not_backed|unverifiable|error)\b(?: +(?P<secs2>\d+\.\ds))?")
+VERDICT = re.compile(r"^(?:(?P<secs>\d+\.\ds|cached) +)?(?:verdict=)?(?P<verdict>pass|fail|na|backed|not_backed|unverifiable|error)\b(?: +(?P<secs2>\d+\.\ds))?")
 VERDICT_COLOUR = {"pass": C_OK, "fail": C_FAIL, "na": C_WARN, "backed": C_OK, "not_backed": C_FAIL, "unverifiable": C_WARN}   # old words: lines before 2026-11-05
 
 
@@ -299,6 +313,17 @@ class LogHighlighter(Highlighter):
             return
         if m.group("tool") == "fetch":         # fetch: grey by default; the outcome words below take their colours over it
             text.stylize(C_MUTE, base, base + len(msg))
+        if m.group("tool") == "search" and m.group("id") == "web":   # web search: a provider's try/ok/failed as a fetch stage's; the query in blue
+            q = msg.find(" | ")
+            if (st := re.match(r"(try|ok|failed) +(exa|serper|brave)\b", msg)):
+                text.stylize(C_MUTE, base, base + len(msg))
+                if st.group(1) != "try":
+                    text.stylize(C_OK if st.group(1) == "ok" else C_TIER, base, base + st.end(2))
+                if q >= 0:
+                    text.stylize(C_URL, base + q + 3, base + len(msg))
+                return
+            if q >= 0:
+                text.stylize(C_URL, base + q + 3, base + len(msg))
         t = TIER.match(msg)
         if t:
             text.stylize(C_SOURCE, base + t.start("name"), base + t.end("name"))
@@ -340,8 +365,8 @@ class LogHighlighter(Highlighter):
             v = VERDICT.match(msg)
             if (pv := re.search(r" (perplexity|google)(?= )", msg.split(" | ")[0] + " ")):   # the provider, grey
                 text.stylize(C_MUTE, base + pv.start() + 1, base + pv.end())
-            if (c := re.search(r" cached(?= )", msg.split(" | ")[0] + " ")):   # the verdict came from the entry's verify.jsonl, no model call
-                text.stylize(C_OK, base + c.start() + 1, base + c.end())
+            for nt in re.finditer(r"\b(?:glyphs|windows)=\d+", msg.split(" | ")[0]):   # side notes (unresolved glyphs, model requests), grey like the rest of the line
+                text.stylize(C_MUTE, base + nt.start(), base + nt.end())
             if v:
                 for g in ("secs", "secs2"):
                     if v.group(g):
@@ -365,10 +390,12 @@ class LogHighlighter(Highlighter):
             lv = LEVEL.search(msg)
             if lv and msg.startswith("exists"):
                 text.stylize(C_OK if lv.group(1) == "full_text" else C_FAIL if lv.group(1) == "title" else C_WARN, base + lv.start(), base + lv.end())
-        elif m.group("tool") in ("search", "pubmed") and re.match(r"(searched|cached|articles)\b", msg):   # search / batch: the keyword green, not bold, the rest grey — time included
+        elif m.group("tool") in ("search", "pubmed") and re.match(r"(searched|ok|cached|articles)\b", msg):   # search / batch: the keyword green, not bold, the rest grey — time included
             text.stylize(C_MUTE, base, base + len(msg))
             w = re.match(r"\S+", msg).group(0)
             text.stylize(C_OK, base, base + len(w))
+            if m.group("id") == "web" and (q := msg.find(" | ")) >= 0:   # web search: the query in blue
+                text.stylize(C_URL, base + q + 3, base + len(msg))
         elif msg.startswith("cached failure"):      # fetch: a stored failure, served again — an outcome, red
             text.stylize(C_FAIL, base, base + len(msg))
             final_fail = True
@@ -408,10 +435,15 @@ class LogHighlighter(Highlighter):
             if m.group("tool") in ("read", "trials"):
                 text.stylize(C_MUTE, base + first.end(), base + len(msg))
             text.stylize(C_TIER, base, base + first.end())
+        # verify, search, a fetch's outcome: where the answer came from — "cached" (steel blue) or "remote"
+        # (light grey, the terminal's text colour) after the result and its time; green stays for results
+        if m.group("tool") in ("verify", "search", "fetch") and (c := re.match(r"\S+ +(?:\d+\.\ds +)?(cached|remote)\b", msg)):
+            text.stylize(C_SOURCE if c.group(1) == "cached" else C_REMOTE, base + c.start(1), base + c.end(1))
         for u in URL.finditer(msg):
             # link= makes it an OSC 8 hyperlink: clickable in terminals that support it
             text.stylize(Style(color=C_URL, bold=False, link=href(self.full_url.get(u.group(0), u.group(0)))), base + u.start(), base + u.end())
-        for h in HTTP.finditer(msg):   # red only on an outcome line; in a step amber like the step
+        skipped = re.search(r"(?:^| )skipped\b", msg)   # a stage skipped for a wall: the reason it repeats stays grey
+        for h in ([] if skipped else HTTP.finditer(msg)):   # red only on an outcome line; in a step amber like the step
             text.stylize(C_FAIL if final_fail else C_TIER, base + h.start(), base + h.end())
 
 
@@ -429,7 +461,11 @@ class LibLog(Log):
     def _display(self, line: str) -> str:
         if not DATE.match(line):              # a mark, pull output, a note: not a log record, shown as written
             return line
-        line = TIER_WORD.sub(r"\1", DATE.sub("", line))
+        line = DATE.sub("", line)
+        # A cached verdict carries no time (1.0.2): a placeholder in its place, shown blank, so the
+        # verdict, basis and score keep the columns of a timed verify line.
+        line = re.sub(r"^(\S+ \S+ verify +\S+ +)(?=verdict=)", r"\1~ ", line)
+        line = TIER_WORD.sub(r"\1", line)
         m = COLS.match(line)
         if m:
             ts, client = m.group(1).split()[:2]
@@ -454,22 +490,33 @@ class LibLog(Log):
             # after; "basis=" and "score=" are dropped on screen — the colours carry them.
             # "level=" goes the same way on every line: full_text green, abstract yellow.
             rest = rest.replace("level=", "")
+            if word == "failed:":                      # a fetch's failure from the cache: "failed: HTTP 404 … cached" (1.0.3), no time before the colon
+                word = "failed"
             word = word.replace("level=", "")          # "status … level=missing": the word is the whole message
-            if re.fullmatch(r"\d+\.\ds", word):
+            if word in ("articles", "record") and not re.match(r"\d+\.\ds", rest):
+                # PubMed rows all from disk, a stored trial record: no time (1.0.2); the column kept blank
+                col = f"{word:<12} {'':>5}"
+            elif word in ("~", "cached") or re.fullmatch(r"\d+\.\ds", word):
                 # On screen the verdict comes first, then the time: "pass  02.8s full_text 0.999"
                 # (the file keeps the time first). 12 + 1 + 5 + 1 = 19, the same column for the basis.
                 rest = rest.replace("basis=", "").replace("score=", "", 1).replace("provider=", "", 1)
                 vm = re.match(r"(?:verdict=)?(pass|fail|na|error|backed|not_backed|unverifiable) *", rest)
+                head, sep, tail = rest.partition(" | ")
+                if word not in ("~", "cached") and re.search(r" cached(?= |$)", head):   # a cached verdict before 1.0.3: "00.0s … cached [glyphs=3] | claim"
+                    word, rest = "cached", re.sub(r" cached(?= |$)", "", head, count=1) + sep + tail
+                    vm = re.match(r"(?:verdict=)?(pass|fail|na|error|backed|not_backed|unverifiable) *", rest)
                 if vm:
-                    col = f"{vm.group(1):<12} {word:>5}"
-                    rest = rest[vm.end():]
+                    col = f"{vm.group(1):<12} {'' if word in ('~', 'cached') else word:>5}"
+                    rest = ("cached " if word == "cached" else "remote ") + rest[vm.end():]   # where the verdict came from: the cache (time blank) or the model just now
                 else:
                     col = f"{word:>5}"
-            elif (tm := re.match(r"(\d+\.\ds):?(?= |$)", rest)):   # "failed 64.6s: …" (fetch) carries a colon
-                # "done 08.3s level=…", "searched 00.6s rows=…", "fetched 00.1s html …", "articles 00.6s …":
+            elif (tm := re.match(r"(\d+\.\ds|cached):?(?= |$)", rest)):   # "failed 64.6s: …" (fetch) carries a colon; a cached search: "ok cached rows=…"
+                # "done 08.3s level=…", "ok 00.6s rows=…" (a search; "searched" before 1.0.3), "fetched 00.1s html …", "articles 00.6s …":
                 # the duration in one column beside the word, the rest keeps its place
-                col = f"{word:<12} {tm.group(1):>5}"
-                rest = rest[tm.end():].lstrip()
+                cached = tm.group(1) == "cached"   # from disk: the time column blank, "cached" opens the details
+                col = f"{word:<12} {'' if cached else tm.group(1):>5}"
+                # A line that can be cached (a search, a fetch's outcome) says where it came from: cached, or remote just now
+                rest = ("cached " if cached else "remote " if tool in ("search", "fetch") and word != "failed" else "") + rest[tm.end():].lstrip()   # a failure says its reason, not where an answer came from
             elif tool in ("startup", "version", "info", "get_version"):
                 col = f"{'':<{WORD_WIDTH}} {word}"   # a one-line message, not an action: no word of its own, the text in the details column
             else:
@@ -565,11 +612,12 @@ def active_tiers() -> list[str]:
     return BUILTIN_TIERS + (["proxy"] if _dotenv("FH_PROXY_URL") else [])
 
 
-# The decision-model providers (src/verify/perplexity.ts, google.ts).
+# The decision-model providers (src/verify/perplexity.ts, google.ts, openai.ts, liquid.ts).
 # In the server's order: perplexity last, it takes any URL the others do not claim.
 VERIFY_PROVIDERS = {
     "google": {"url": "https://generativelanguage.googleapis.com", "host": "generativelanguage.googleapis.com", "key": ("AIza", "AQ."), "model": "gemini-decision-1", "model_prefix": "gemini-"},
     "openai": {"url": "https://api.openai.com", "host": "api.openai.com", "key": ("sk-",), "model": "gpt-6-luna", "model_prefix": "gpt-"},
+    "liquid": {"url": "https://api.liquid.ai", "host": "api.liquid.ai", "key": ("liquid_",), "model": "d1-ultra", "model_prefix": "d1"},
     "perplexity": {"url": "https://api.perplexity.ai", "host": "api.perplexity.ai", "key": ("pplx-",), "model": "pplx-decider-flash-v1.2", "model_prefix": "pplx-"},
 }
 
@@ -637,6 +685,59 @@ def check_unlocker(name: str) -> dict:
     return res
 
 
+SEARCHERS = (("exa", "FH_WEB_SEARCH_EXA_API_KEY"), ("serper", "FH_WEB_SEARCH_SERPER_API_KEY"), ("brave", "FH_WEB_SEARCH_BRAVE_API_KEY"))   # src/websearch.ts order
+_search_last: dict = {}   # name -> last result
+
+
+def searcher_order() -> list[str]:
+    """The web search providers that take part (src/websearch.ts): every one with a key,
+    and none unless FH_WEB_SEARCH_ENABLED is true (development only)."""
+    if not re.fullmatch(r"(?i)true|1|yes|on", (_dotenv("FH_WEB_SEARCH_ENABLED") or "").strip()):
+        return []
+    return [n for n, k in SEARCHERS if _dotenv(k)]
+
+
+def check_searcher(name: str) -> dict:
+    """Whether one web search provider answers: one search of one result, timed —
+    at most every UNLOCK_EVERY seconds, since each is billed; in between the last result stands."""
+    import urllib.error, urllib.parse, urllib.request
+    last = _search_last.get(name)
+    if last and time.time() - last.get("at", 0) < UNLOCK_EVERY:
+        return last
+    key = _dotenv(dict(SEARCHERS)[name]) or ""
+    q = "example domain"
+    if name == "exa":
+        req = urllib.request.Request("https://api.exa.ai/search", data=json.dumps({"query": q, "numResults": 1}).encode(), headers={"x-api-key": key, "Content-Type": "application/json", "User-Agent": "evidence-mcp-tui"})
+        hits = lambda d: d.get("results")
+    elif name == "serper":
+        req = urllib.request.Request("https://google.serper.dev/search", data=json.dumps({"q": q, "num": 1}).encode(), headers={"X-API-KEY": key, "Content-Type": "application/json", "User-Agent": "evidence-mcp-tui"})
+        hits = lambda d: d.get("organic")
+    else:
+        req = urllib.request.Request(f"https://api.search.brave.com/res/v1/web/search?{urllib.parse.urlencode({'q': q, 'count': 1})}", headers={"X-Subscription-Token": key, "Accept": "application/json", "User-Agent": "evidence-mcp-tui"})
+        hits = lambda d: (d.get("web") or {}).get("results")
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            ok = bool(hits(json.loads(r.read() or b"{}")))
+        res = {"provider": name, "ok": ok, "error": None if ok else "no results"}
+    except urllib.error.HTTPError as e:
+        res = {"provider": name, "ok": False, "error": f"HTTP {e.code}"}
+    except Exception as e:
+        res = {"provider": name, "ok": False, "error": "timeout" if "timed out" in str(e) else str(e)[:60]}
+    res.update(secs=time.time() - t0, at=time.time())
+    _search_last[name] = res
+    return res
+
+
+def check_searchers() -> list[dict]:
+    from concurrent.futures import ThreadPoolExecutor
+    names = searcher_order()
+    if not names:
+        return []
+    with ThreadPoolExecutor(max_workers=len(names)) as ex:
+        return list(ex.map(check_searcher, names))
+
+
 def own_stages() -> list[tuple[str, str, int]]:
     """Our own stage hosts, as the server reads them (src/fetchproxy.ts, src/browser.ts):
     (name, host, port) — the fetch proxy, the Playwright servers, the Chromes."""
@@ -654,23 +755,36 @@ def own_stages() -> list[tuple[str, str, int]]:
     return out
 
 
+def _check_stage(stage: tuple[str, str, int]) -> dict:
+    import socket
+    name, host, port = stage
+    t0 = time.time()
+    try:
+        with socket.create_connection((host, port), timeout=3):
+            return {"name": name, "up": True, "secs": time.time() - t0, "error": None}
+    except Exception as e:
+        return {"name": name, "up": False, "secs": time.time() - t0, "error": "no answer within 3 s" if isinstance(e, socket.timeout) else (getattr(e, "strerror", None) or str(e))[:40]}
+
+
 def check_stages() -> list[dict]:
     """Whether each of our own stage hosts answers: one TCP connect each (src/hosts.ts),
-    free, so on every scan."""
-    import socket
-    res = []
-    for name, host, port in own_stages():
-        t0 = time.time()
-        try:
-            with socket.create_connection((host, port), timeout=3):
-                res.append({"name": name, "up": True, "secs": time.time() - t0, "error": None})
-        except Exception as e:
-            res.append({"name": name, "up": False, "secs": time.time() - t0, "error": "no answer within 3 s" if isinstance(e, socket.timeout) else (getattr(e, "strerror", None) or str(e))[:40]})
-    return res
+    free, so on every scan — all at once, so a host that is down costs its 3 s once."""
+    from concurrent.futures import ThreadPoolExecutor
+    stages = own_stages()
+    if not stages:
+        return []
+    with ThreadPoolExecutor(max_workers=len(stages)) as ex:
+        return list(ex.map(_check_stage, stages))
 
 
 def check_unlockers() -> list[dict]:
-    return [check_unlocker(n) for n in unlocker_order()]
+    """Every unlocker at once: three paid requests one after another took 5.4 s on live (2026-11-15)."""
+    from concurrent.futures import ThreadPoolExecutor
+    names = unlocker_order()
+    if not names:
+        return []
+    with ThreadPoolExecutor(max_workers=len(names)) as ex:
+        return list(ex.map(check_unlocker, names))
 
 
 def check_verify() -> dict:
@@ -717,6 +831,9 @@ def check_verify() -> dict:
     elif name == "openai":
         body = json.dumps({"model": model, "input": "The sky is blue.", "questions": [{"type": "predicate", "name": "q", "instructions": "Is the sky blue?"}]}).encode()
         path = "/v1/decisions"
+    elif name == "liquid":   # Perplexity's request at another path (src/verify/liquid.ts): the Liquid API under /decisions, llama.cpp (d1-2B) at the root
+        body = json.dumps({"model": model, "state": "The sky is blue.", "questions": q}).encode()
+        path = ("/decisions" if "api.liquid.ai" in base else "") + "/v1/systemone"
     else:
         body = json.dumps({"model": model, "state": "The sky is blue.", "questions": q}).encode()
         path = "/v1/decisions"
@@ -845,9 +962,11 @@ def log_stats(now: float) -> dict:
             out["failed"] += 1
         elif tool == "verify":
             out["verify"] += 1
-        elif tool == "fetch" and (msg.startswith("fetched") or msg.startswith("cached") or msg.startswith("failed")):
-            out["fetches"] += 1                   # one line per fh_fetch_url call; the stage lines are not counted
-            out["cached"] += msg.startswith("cached")
+        elif tool == "fetch" and re.match(r"(ok|failed|fetched|cached)\b", msg) and not STAGE_STEP.match(msg):
+            # one line per fh_fetch_url call — "ok …" / "failed …", "cached" at its end (1.0.3;
+            # "fetched …" / "cached …" before); a stage's "ok playwright …" / "failed fetch: …" is a step, not counted
+            out["fetches"] += 1
+            out["cached"] += msg.startswith("cached") or bool(re.search(r"\bcached\b", msg))
     if out["last_line_at"] is not None:
         out["age_secs"] = max(0, int(now - out["last_line_at"]))
     return out
@@ -875,54 +994,110 @@ class _StatusHandler(BaseHTTPRequestHandler):
         pass   # stderr is the TUI's terminal
 
 
+# The last scan's reading of each entry, by its directory: (mtime_ns, record). An entry's
+# files are written atomically (a rename), so a changed file changes the directory's mtime:
+# an unchanged directory is not read again. On live (8,884 entries, 2026-11-15) reading
+# every meta file and every file's size took 5.7 s a scan, ~200,000 stat calls.
+_ENTRIES: dict[str, tuple[int, dict]] = {}
+
+
+def _read_entry(ent: str, typ: str, name: str) -> dict | None:
+    meta = os.path.join(ent, f"{typ}-{name}-meta.md")
+    try:
+        # The whole frontmatter: a long coi or funding line can push
+        # level: past any fixed byte count (67 entries past 4000).
+        with open(meta, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    end = text.find("\n---", 4)
+    head = text[: end if end > 0 else len(text)]
+    lv = re.search(r"^level: (\S+)", head, re.M)
+    try:                                   # the entry's files on disk
+        size = sum(e.stat(follow_symlinks=False).st_size for e in os.scandir(ent) if e.is_file(follow_symlinks=False))
+    except OSError:
+        size = 0
+    return {"level": lv.group(1) if lv else "unknown", "size": size,
+            "retracted": bool(re.search(r"^retracted: (yes|true)", head, re.M)),
+            "no_abstract": bool(re.search(r"^has_abstract: (no|false)", head, re.M))}   # absent = has one
+
+
+def _dirs(path: str):
+    try:
+        return [e for e in os.scandir(path) if e.is_dir(follow_symlinks=False)]
+    except OSError:
+        return []
+
+
+_COUNTS: dict[str, tuple[int, int]] = {}   # <top>/<2>/<4> directory → (mtime_ns, its .json files), as _ENTRIES
+
+
+def _count_json(top: str) -> int:
+    """Files <top>/<2>/<4>/<key>.json (cached verdicts, searches): a directory listed
+    again only when its mtime changed (live: 61,000 verdicts)."""
+    n = 0
+    for a in _dirs(top):
+        for b in _dirs(a.path):
+            try:
+                mt = b.stat(follow_symlinks=False).st_mtime_ns
+                hit = _COUNTS.get(b.path)
+                if not hit or hit[0] != mt:
+                    hit = (mt, sum(1 for e in os.scandir(b.path) if e.name.endswith(".json")))
+                    _COUNTS[b.path] = hit
+                n += hit[1]
+            except OSError:
+                pass
+    return n
+
+
 def scan_library(lib: Path) -> dict:
     """Entry counts from the meta files: <type>/<L1>/<L2>/<n>/<type>-<n>-meta.md.
-    Reads every meta file, so it is called on a timer, not per log line."""
+    Called on a timer, not per log line; an entry whose directory is unchanged since
+    the last scan is taken from _ENTRIES, not read again."""
     out = {"entries": 0, "by_level": {}, "by_type": {}, "retracted": 0, "no_abstract": 0, "types": {}, "bytes": 0}
     if not lib.is_dir():
         return out
-    for typ in (d for d in lib.iterdir() if d.is_dir()):
-        for l1 in (d for d in typ.iterdir() if d.is_dir()):
-            for l2 in (d for d in l1.iterdir() if d.is_dir()):
-                for ent in (d for d in l2.iterdir() if d.is_dir()):
-                    meta = ent / f"{typ.name}-{ent.name}-meta.md"
-                    if not meta.is_file():
-                        continue
+    seen: set[str] = set()
+    for typ in _dirs(str(lib)):
+        if typ.name.startswith(".") or typ.name in ("verify", "search", "logs"):   # bookkeeping, no entries
+            continue
+        for l1 in _dirs(typ.path):
+            for l2 in _dirs(l1.path):
+                for ent in _dirs(l2.path):
                     try:
-                        # The whole frontmatter: a long coi or funding line can push
-                        # level: past any fixed byte count (67 entries past 4000).
-                        text = meta.read_text(encoding="utf-8", errors="replace")
-                        end = text.find("\n---", 4)
-                        head = text[: end if end > 0 else len(text)]
+                        mt = ent.stat(follow_symlinks=False).st_mtime_ns
                     except OSError:
                         continue
-                    lv = re.search(r"^level: (\S+)", head, re.M)
-                    level = lv.group(1) if lv else "unknown"
+                    seen.add(ent.path)
+                    hit = _ENTRIES.get(ent.path)
+                    if hit and hit[0] == mt:
+                        rec = hit[1]
+                    else:
+                        rec = _read_entry(ent.path, typ.name, ent.name)
+                        if rec is None:
+                            _ENTRIES.pop(ent.path, None)
+                            continue
+                        _ENTRIES[ent.path] = (mt, rec)
+                    level = rec["level"]
                     out["entries"] += 1
                     out["by_level"][level] = out["by_level"].get(level, 0) + 1
                     out["by_type"][typ.name] = out["by_type"].get(typ.name, 0) + 1
                     t = out["types"].setdefault(typ.name, {"entries": 0, "full_text": 0, "abstract": 0, "no_abstract": 0, "retracted": 0, "bytes": 0})
                     t["entries"] += 1
-                    try:                                   # the entry's files on disk (0.1 s for 28,000 files)
-                        size = sum(f.lstat().st_size for f in ent.iterdir() if f.is_file())
-                    except OSError:
-                        size = 0
-                    t["bytes"] += size
-                    out["bytes"] += size
+                    t["bytes"] += rec["size"]
+                    out["bytes"] += rec["size"]
                     if level in ("full_text", "abstract"):
                         t[level] += 1
-                    retracted = bool(re.search(r"^retracted: (yes|true)", head, re.M))
-                    no_abstract = bool(re.search(r"^has_abstract: (no|false)", head, re.M))   # absent = has one
-                    out["retracted"] += retracted
-                    out["no_abstract"] += no_abstract
-                    t["retracted"] += retracted
-                    t["no_abstract"] += no_abstract
+                    out["retracted"] += rec["retracted"]
+                    out["no_abstract"] += rec["no_abstract"]
+                    t["retracted"] += rec["retracted"]
+                    t["no_abstract"] += rec["no_abstract"]
+    for gone in [k for k in _ENTRIES if k not in seen]:   # deleted entries
+        del _ENTRIES[gone]
     # verify/<2>/<4>/<key>.json: one file per cached verdict (fh_verify_claim)
-    vdir = lib / "verify"
-    out["verdicts"] = sum(1 for _ in vdir.glob("*/*/*.json")) if vdir.is_dir() else 0
+    out["verdicts"] = _count_json(str(lib / "verify"))
     # search/<2>/<4>/<key>.json: one file per cached registry search (fh_clinicaltrials_search_studies)
-    sdir = lib / "search"
-    out["searches"] = sum(1 for _ in sdir.glob("*/*/*.json")) if sdir.is_dir() else 0
+    out["searches"] = _count_json(str(lib / "search"))
     out["servers"] = read_servers(lib)
     return out
 
@@ -993,6 +1168,12 @@ class Ctl(App):
     #nav    { height: 1; background: transparent; padding: 0; }
     #nav-spacer { width: 1fr; }
     #log-select   { width: 7;  height: 1; margin: 0 1 0 1; }
+    #client-select { width: 10; height: 1; margin: 0 1 0 0; }
+    #client-select > SelectCurrent { height: 1; border: none; padding: 0 1; background: transparent; }
+    #client-select #label { color: #6c6c6c; }
+    #client-select:focus > SelectCurrent { background: $accent; color: black; text-style: bold; }
+    #client-select:focus #label, #client-select:focus .arrow { color: black; }
+    #client-select SelectOverlay { width: 24; }
     #admin-select { width: 9;  height: 1; margin: 0 1 0 1; }
     #log-select > SelectCurrent, #admin-select > SelectCurrent {
         height: 1; border: none; padding: 0 1; background: transparent;
@@ -1028,23 +1209,26 @@ class Ctl(App):
         scrollbar-color: $primary;
         scrollbar-size: 1 1;
     }
-    #status-bar { height: 14; background: transparent; }
+    #status-bar { height: 16; background: transparent; }
     #status-divider { width: 1fr; height: 1; padding: 0 1; color: #4e4e4e; background: transparent; text-wrap: nowrap; text-overflow: clip; }
-    #status-row-1, #status-row-verify, #status-row-unlocker, #status-row-proxy, #status-row-playwright, #status-row-chrome, #status-row-2, #status-row-3, #status-row-doi, #status-row-4, #status-row-5, #status-row-url, #status-row-verdicts, #status-row-search { height: 1; background: transparent; }
-    #row-verify, #row-unlock, #row-proxy, #row-playwright, #row-chrome { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
+    #status-row-server, #status-row-fh_verify_claim, #status-row-websearch, #status-row-1, #status-row-verify, #status-row-unlocker, #status-row-proxy, #status-row-playwright, #status-row-chrome, #status-row-2, #status-row-3, #status-row-doi, #status-row-4, #status-row-5, #status-row-url, #status-row-verdicts, #status-row-search { height: 1; background: transparent; }
+    #row-verify, #row-unlock, #row-websearch, #row-proxy, #row-playwright, #row-chrome { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-doi { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-pmid, #row-dailymed { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-nct, #row-url, #row-verdicts, #row-search { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #status  { width: 1fr;  height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
-    #status.alert { color: #ff5f5f; }
-    #status.idle  { color: #6c6c6c; }
     #scan    { width: auto; height: 1; padding: 0 2 0 0; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
     #endpoint { width: auto; height: 1; padding: 0; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
     #endpoint.alert { color: #ff5f5f; }
     #row2-spacer { width: 1fr; height: 1; background: transparent; }
     #ver     { width: auto; height: 1; padding: 0 1 0 0; color: #5fa8ff; background: transparent; text-wrap: nowrap; }
     .sep     { width: auto; height: 1; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
-    #sep-endpoint { display: none; }
+    #sep-endpoint, #sep-note, #sep-health { display: none; }
+    #health  { width: auto; height: 1; padding: 0; background: transparent; text-wrap: nowrap; }
+    #note    { width: auto; height: 1; padding: 0; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
+    #note.alert { color: #ff5f5f; }
+    #server-label { width: auto; height: 1; padding: 0 0 0 1; background: transparent; text-wrap: nowrap; }
+    #server-spacer { width: 1fr; height: 1; background: transparent; }
     #mcps    { width: auto; height: 1; padding: 0; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
     """
 
@@ -1061,7 +1245,8 @@ class Ctl(App):
         Binding("c", "clear", "clear", priority=True),
         Binding("m", "mark", "mark", priority=True),      # a marker line into evidence.log, to find a test run later
         Binding("e", "erase", "erase", priority=True),    # truncate evidence.log (press twice)
-        Binding("r", "refresh", "refresh", priority=True, show=False),  # rescan now; no menu entry, the timer covers it
+        Binding("r", "rotate", "rotate", priority=True),  # evidence.log → a dated file, a fresh log, its alerts cleared
+        Binding("s", "refresh", "rescan", priority=True),  # rescan now (Admin menu), else every STATUS_SECS
         Binding("u", "update", "update", priority=True),
         Binding("q", "quit", "quit", priority=True),
         Binding("ctrl+c", "copy", "copy", priority=True, show=False),   # copy the selection (auto-copied on mouse-up anyway)
@@ -1074,7 +1259,7 @@ class Ctl(App):
     ]
 
     # While the filter field has focus, the one-key commands are typing.
-    TYPING_OFF = {"nav", "pause", "log_bottom", "log_top", "clear", "mark", "erase", "refresh", "update", "quit", "filter_focus", "fails_toggle", "alerts_toggle", "errors_toggle"}
+    TYPING_OFF = {"nav", "pause", "log_bottom", "log_top", "clear", "mark", "erase", "rotate", "refresh", "update", "quit", "filter_focus", "fails_toggle", "alerts_toggle", "errors_toggle"}
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action in self.TYPING_OFF and isinstance(self.focused, Input):
@@ -1084,13 +1269,15 @@ class Ctl(App):
     def __init__(self) -> None:
         super().__init__(ansi_color=True)
         self._pos = 0            # bytes of the log consumed
+        self._fh = None          # evidence.log, held open: a rename leaves it on the old file (_open_log)
+        self._ino: int | None = None
         self._lines = 0          # lines shown since start
         self._last_ts = ""       # timestamp of the last log line
         self._scanning = False
         self._last_scan_start = 0.0   # when the last scan began (log-triggered rescans wait RESCAN_MIN_SECS)
-        self._lib_size = ""          # the library's size, shown on the storage row
+        self._lib_size = ""          # the library's size, shown on the usage row
         self._disk: tuple[int, int] | None = None   # the volume's fill level (percent, total bytes), shown there too
-        self._status_note = ""       # a note shown on the location row instead of the path
+        self._status_note = ""       # a note shown on the server line
         self._updating = False
         self._paused = False     # Space: hold the view even when it is at the end
         self._erase_armed = 0.0  # e pressed once: the second press within ERASE_SECS erases
@@ -1108,15 +1295,19 @@ class Ctl(App):
         self._errors = False     # the Errors only toggle: only the calls the model got wrong
         self._fails = False      # the Fails only toggle: only correct calls that failed
         self._alerts_only = False  # the !! Alerts only toggle: only "!!" lines; takes turns with Fails only
+        self._clients: list[str] = []   # the Client menu's entries
+        self._client_seen: set[str] = set()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="nav"):
-            yield Select([("(b)ottom", "log_bottom"), ("(t)op", "log_top"), ("(c)lear", "clear"), ("(m)ark", "mark"), ("(e)rase", "erase")],
+            yield Select([("(b)ottom", "log_bottom"), ("(t)op", "log_top"), ("(c)lear", "clear"), ("(m)ark", "mark"), ("(r)otate", "rotate"), ("(e)rase", "erase")],
                          id="log-select", prompt="Log", allow_blank=True)
-            yield Select([("(u)pdate", "update"), ("(q)uit", "quit")],
+            yield Select([("re(s)can", "refresh"), ("(u)pdate", "update"), ("(q)uit", "quit")],
                          id="admin-select", prompt="Admin", allow_blank=True)
             yield Input(placeholder="Filter", id="filter")
             yield FilterClear("✕", id="filter-clear")
+            if SHOW_CLIENT:   # the clients seen in the log; a pick puts its name in the filter
+                yield Select([], id="client-select", prompt="Client", allow_blank=True)
             yield FailsToggle("Fails", id="fails")
             yield ErrorsToggle("Errors", id="errors")
             yield AlertsToggle("Alerts", id="alerts")
@@ -1124,17 +1315,25 @@ class Ctl(App):
             yield Static(socket.gethostname().split(".")[0], id="host")
         yield LibLog(id="output", highlight=True, max_lines=MAX_LINES, auto_scroll=True)
         with Vertical(id="status-bar"):
-            with Horizontal(id="status-row-fh_verify_claim"):   # the decision model behind fh_verify_claim, and whether it answers
-                yield Static("decider  …", id="row-verify")
-                # The TUI's own status, at the right end of the first line under the log:
-                # the /status port, how many MCP servers run on this library, the
-                # countdown — light grey — and the TUI's version in blue.
-                yield Static("", id="endpoint")
-                yield Static("  ·  ", id="sep-endpoint", classes="sep")   # shown with the port
+            with Horizontal(id="status-row-server"):
+                # The first line under the log: this library's servers — how many MCP servers
+                # run on it, then the TUI's /status port when it serves one — and, at the right
+                # end, the countdown to the next rescan and the TUI's version in blue.
+                yield Static(Text(f"{'server':<10} ", style=C_TOOL), id="server-label")
+                yield Static("", id="health")   # the /status verdict: healthy, or degraded and what is wrong
+                yield Static("  ·  ", id="sep-health", classes="sep")
                 yield Static("", id="mcps")
-                yield Static("  ·  ", classes="sep")
+                yield Static("  ·  ", id="sep-endpoint", classes="sep")   # shown with the port
+                yield Static("", id="endpoint")
+                yield Static("", id="server-spacer")
+                # At the right end, before the rescan: the view's state — "Space to pause log",
+                # paused, scrolled back, the filter's count — or something off, red.
+                yield Static("", id="note")
+                yield Static("  ·  ", id="sep-note", classes="sep")   # shown with a note
                 yield Static("", id="scan")
                 yield Static(f"v{TUI_VERSION}", id="ver")
+            with Horizontal(id="status-row-fh_verify_claim"):   # the decision model behind fh_verify_claim, and whether it answers
+                yield Static("decider  …", id="row-verify")
             with Horizontal(id="status-row-proxy"):   # our own stage hosts, one line per kind, and whether each answers
                 yield Static("proxy     …", id="row-proxy")
             with Horizontal(id="status-row-playwright"):
@@ -1143,9 +1342,11 @@ class Ctl(App):
                 yield Static("chrome    …", id="row-chrome")
             with Horizontal(id="status-row-unlocker"):   # stage 3, after the three own-stage lines: the unlockers, and whether each answers
                 yield Static("unlocker …", id="row-unlock")
+            with Horizontal(id="status-row-websearch"):   # fh_web_search's providers, and whether each answers
+                yield Static("web search …", id="row-websearch")
             with Horizontal(id="status-row-1"):   # where the library is and its size — with the health lines, above the divider
                 yield Static(f"location {FH_EVIDENCE_DIR}", id="status")
-            # A divider: the health lines and storage above, the library's counts below.
+            # A divider: the health lines and usage above, the library's counts below.
             yield Static("─" * 500, id="status-divider")
             with Horizontal(id="status-row-3"):   # one row per entry type
                 yield Static("", id="row-pmid")
@@ -1162,10 +1363,30 @@ class Ctl(App):
             with Horizontal(id="status-row-search"):   # … version in the lower right corner
                 yield Static("", id="row-search")
 
+    def _ensure_log(self) -> None:
+        """At startup, no log yet (a new or emptied library, no server started on it): an
+        empty logs/evidence.log, so the view follows from the first line and /status has no
+        "evidence.log missing". Only in a library directory that exists — a wrong
+        FH_EVIDENCE_DIR stays visible."""
+        global LOG_FILE
+        if LOG_FILE_NEW.is_file() or LOG_FILE_OLD.is_file() or not FH_EVIDENCE_DIR.is_dir():
+            return
+        try:
+            LOG_FILE_NEW.parent.mkdir(exist_ok=True)
+            LOG_FILE_NEW.touch()
+            LOG_FILE, self._pos = LOG_FILE_NEW, 0
+        except OSError:
+            pass   # read-only: the note says it is missing
+
     def on_mount(self) -> None:
         self.title = "evidence-mcp"
         self.query_one("#log-select", Select).focus()
+        if not searcher_order():   # no web search provider configured: no web search line
+            self.query_one("#status-row-websearch").display = False
+            self.query_one("#status-bar").styles.height = 15
+        self._ensure_log()
         self._load_tail()
+        self._refresh_clients(list(self._raw))
         self._log().anchor()   # pinned to the end through new lines, a resize (tmux attach) and a scrollbar appearing — until the user scrolls up
         self.set_interval(POLL_SECS, self._poll)
         self._next_scan = time.monotonic() + STATUS_SECS
@@ -1181,29 +1402,33 @@ class Ctl(App):
     def _log(self) -> Log:
         return self.query_one("#output", Log)
 
-    def _set_status(self, note: str = "", alert: bool = False) -> None:
-        """The storage row (above the counts): the library's size and where it is (the full path is in
-        fh_info), replaced by a note while the view is not following the log
-        (grey) or something is off (red) — the row's right side holds the counts."""
-        w = self.query_one("#status", Static)
+    def _set_status(self, note: str | Text = "", alert: bool = False) -> None:
+        """A note at the right end of the server line, before the rescan — the view not following the log (paused,
+        scrolled back, filtered: grey) or something off (red) — and the storage row (above
+        the counts): the library's size, how full its volume is, and where it is."""
         self._status_note = note
-        if note:
-            w.update(note)
-        else:
-            # "storage    <path> 23.4 MB": labelled like the health lines above it, the
-            # size after the path in dark grey, like their milliseconds.
-            t = Text(); t.append(f"{'storage':<10} ", style=C_TOOL)
-            t.append(str(FH_EVIDENCE_DIR))
-            if self._lib_size:
-                num, _, unit = self._lib_size.partition(" ")
-                t.append(f" {num}", style=C_OK).append(f" {unit}", style=C_MUTE)
-            if self._disk:
-                # The volume the library is on: how full, green — red from DISK_FULL_PCT on.
-                pct, total = self._disk
-                t.append(" · disk ", style=C_MUTE).append(f"{pct}%", style=C_FAIL if pct >= DISK_FULL_PCT else C_OK).append(f" of {human(total)}", style=C_MUTE)
-            w.update(t)
-        w.set_class(bool(note) and alert, "alert")
-        w.set_class(bool(note) and not alert, "idle")
+        n = self.query_one("#note", Static)
+        # Following the log: the key that pauses it, in grey.
+        shown = note or (Text("Space to pause log", style=C_MUTE) if LOG_FILE.is_file() else "")
+        n.update(shown)
+        n.set_class(alert, "alert")
+        self.query_one("#sep-note", Static).display = bool(shown)
+        w = self.query_one("#status", Static)
+        # "storage    23.4 MB · 8% of 500 GB · <path>": labelled like the health lines
+        # above it; the library's size in green, the volume it is on (how full, green —
+        # red from DISK_FULL_PCT on), then where it is, in grey.
+        t = Text(); t.append(f"{'storage':<10} ", style=C_TOOL)
+        parts = 0
+        if self._lib_size:
+            num, _, unit = self._lib_size.partition(" ")
+            t.append(num, style=C_OK).append(f" {unit}", style=C_MUTE); parts += 1
+        if self._disk:
+            pct, total = self._disk
+            if parts: t.append(" · ", style=C_MUTE)
+            t.append(f"{pct}%", style=C_FAIL if pct >= DISK_FULL_PCT else C_OK).append(f" of {human(total)}", style=C_MUTE); parts += 1
+        if parts: t.append(" · ", style=C_MUTE)
+        t.append(str(FH_EVIDENCE_DIR), style=C_MUTE)
+        w.update(t)
 
     def _refresh_follow(self) -> None:
         """Status note from the follow state: paused (Space), scrolled back (mouse/PageUp
@@ -1215,9 +1440,9 @@ class Ctl(App):
             what = " and ".join(([f"“{self._filter}”"] if self._filter else []) + ([kinds] if kinds else []))
             self._set_status(f"filter {what} — {self._matches} of {len(self._raw)} lines" + (", paused" if self._paused else ", scrolled back" if not self._following() else ""))
         elif self._paused:
-            self._set_status("paused — Space or b to follow")
+            self._set_status(Text("log paused", style=C_TIER).append(" — Space to follow", style=C_MUTE))
         elif not self._following():
-            self._set_status("scrolled back — Space or b to follow")
+            self._set_status(Text("log scrolled back", style=C_TIER).append(" — Space to follow", style=C_MUTE))
         else:
             self._set_status()
 
@@ -1225,7 +1450,8 @@ class Ctl(App):
         if not LOG_FILE.is_file():
             self._set_status("no evidence.log yet, waiting", alert=True)
             return
-        data = LOG_FILE.read_bytes()
+        self._open_log()
+        data = self._fh.read() if self._fh else b""
         self._pos = len(data)
         lines = data.decode("utf-8", errors="replace").splitlines()
         for ln in lines:
@@ -1238,32 +1464,66 @@ class Ctl(App):
             self._last_ts = shown[-1][:19]
         self._set_status()
 
+    def _open_log(self) -> None:
+        """Hold evidence.log open: a rename (a server's rotation at 5 MB, r here) leaves this
+        handle on the old file, so its last lines are still read, and the inode says it moved."""
+        try:
+            if self._fh:
+                self._fh.close()
+        except OSError:
+            pass
+        try:
+            self._fh = LOG_FILE.open("rb")
+            self._ino = os.fstat(self._fh.fileno()).st_ino
+        except OSError:
+            self._fh, self._ino = None, None
+
+    def _read_new(self) -> list[str]:
+        """The complete lines written since the last read, from the held handle."""
+        if not self._fh:
+            return []
+        try:
+            size = os.fstat(self._fh.fileno()).st_size
+        except OSError:
+            return []
+        if size < self._pos:            # truncated in place (not by e here): start over
+            self._pos = 0
+            self._log().write_line("─── evidence.log was truncated — reading from the start ───")
+            self._set_status()
+        if size == self._pos:
+            return []
+        self._fh.seek(self._pos)
+        chunk = self._fh.read(size - self._pos)
+        nl = chunk.rfind(b"\n")          # keep a partial trailing line for the next poll
+        if nl < 0:
+            return []
+        self._pos += nl + 1
+        return chunk[: nl].decode("utf-8", errors="replace").splitlines()
+
     def _poll(self) -> None:
         global LOG_FILE
         if LOG_FILE == LOG_FILE_OLD and LOG_FILE_NEW.is_file():   # a newer server moved the log into logs/
             LOG_FILE = LOG_FILE_NEW
             self._pos = 0
-        if not LOG_FILE.is_file():
-            return
+            self._open_log()
         try:
-            size = LOG_FILE.stat().st_size
+            ino = LOG_FILE.stat().st_ino
         except OSError:
-            return
-        if size < self._pos:            # truncated or rotated: start over
+            ino = None                  # renamed, the next line not written yet: drain the old one
+        if not self._fh:
+            if ino is None:
+                return
+            self._pos = 0               # the log appeared (or the handle was lost): from its start
+            self._open_log()
+        self._show(self._read_new())
+        if ino is not None and ino != self._ino:
+            # Rotated: the old file is read to its end above; the new one from its start.
             self._pos = 0
-            self._log().write_line("!! evidence.log was truncated — reading from the start")
-            self._set_status()
-        if size == self._pos:
-            return
-        with LOG_FILE.open("rb") as f:
-            f.seek(self._pos)
-            chunk = f.read(size - self._pos)
-        # keep a partial trailing line for the next poll
-        nl = chunk.rfind(b"\n")
-        if nl < 0:
-            return
-        self._pos += nl + 1
-        lines = chunk[: nl].decode("utf-8", errors="replace").splitlines()
+            self._open_log()
+            self._log().write_line("─── evidence.log rotated ───")
+            self._show(self._read_new())
+
+    def _show(self, lines: list[str]) -> None:
         if not lines:
             return
         for ln in lines:
@@ -1273,6 +1533,7 @@ class Ctl(App):
         self._matches += len(shown) if self._filtering() else 0
         if shown:
             self._log().write_lines(shown)
+        self._refresh_clients(lines)
         if self._following():
             self._log().scroll_end(animate=False, immediate=True)
         self._lines += len(lines)
@@ -1292,9 +1553,8 @@ class Ctl(App):
         if left <= 0 and not self._scanning:
             self._start_scan()
             left = STATUS_SECS
-        # The countdown in steps of 5 s: each change repaints the status line.
         self.query_one("#scan", Static).update(
-            "scanning…" if self._scanning else f"rescan in {max(5 * ((left + 4) // 5), 0)}s")
+            "scanning…" if self._scanning else f"rescan in {max(left, 0)}s")
 
     def _start_scan(self) -> None:
         if self._scanning:
@@ -1307,29 +1567,31 @@ class Ctl(App):
     def _scan(self) -> None:
         if PULL and not self._updating:
             self._pull_in_cycle()
+        # The library read and every check at once — the decider, the unlockers, our stage
+        # hosts: the scan takes as long as the slowest, not the sum.
+        from concurrent.futures import ThreadPoolExecutor
+        def guard(fn, fallback):
+            def run():
+                try:
+                    return fn()
+                except Exception as e:  # pragma: no cover
+                    return fallback(str(e)[:60])
+            return run
+        def disk():
+            du = shutil.disk_usage(FH_EVIDENCE_DIR)   # the volume the library is on: one statvfs, free
+            return {"pct": round(100 * du.used / du.total) if du.total else 0, "total": du.total, "free": du.free}
         t0 = time.time()
-        try:
-            res = scan_library(FH_EVIDENCE_DIR)
-        except Exception as e:  # pragma: no cover
-            res = {"error": str(e)}
-        res["took"] = time.time() - t0
-        try:   # the volume the library is on: one statvfs, free
-            du = shutil.disk_usage(FH_EVIDENCE_DIR)
-            res["disk"] = {"pct": round(100 * du.used / du.total) if du.total else 0, "total": du.total, "free": du.free}
-        except OSError:
-            res["disk"] = None
-        try:
-            res["verify"] = check_verify()
-        except Exception as e:  # pragma: no cover
-            res["verify"] = {"configured": True, "ok": False, "error": str(e)[:60]}
-        try:
-            res["unlockers"] = check_unlockers()
-        except Exception as e:  # pragma: no cover
-            res["unlockers"] = [{"provider": "?", "ok": False, "error": str(e)[:60]}]
-        try:
-            res["stages"] = check_stages()
-        except Exception as e:  # pragma: no cover
-            res["stages"] = [{"name": "?", "up": False, "error": str(e)[:60]}]
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            f_lib = ex.submit(guard(lambda: scan_library(FH_EVIDENCE_DIR), lambda e: {"error": e}))
+            f_disk = ex.submit(guard(disk, lambda e: None))
+            f_ver = ex.submit(guard(check_verify, lambda e: {"configured": True, "ok": False, "error": e}))
+            f_unl = ex.submit(guard(check_unlockers, lambda e: [{"provider": "?", "ok": False, "error": e}]))
+            f_stg = ex.submit(guard(check_stages, lambda e: [{"name": "?", "up": False, "error": e}]))
+            f_web = ex.submit(guard(check_searchers, lambda e: [{"provider": "?", "ok": False, "error": e}]))
+            res = f_lib.result()
+            res["took"] = time.time() - t0
+            res["disk"], res["verify"], res["unlockers"], res["stages"] = f_disk.result(), f_ver.result(), f_unl.result(), f_stg.result()
+            res["searchers"] = f_web.result()
         res["log"] = log_stats(time.time())
         self.call_from_thread(self._show_scan, res)
 
@@ -1385,6 +1647,19 @@ class Ctl(App):
             if ur.get("secs") is not None:
                 u.append(f" {ur['secs'] * 1000:.0f} ms", style=C_MUTE)
         self.query_one("#row-unlock", Static).update(u)
+        # fh_web_search's providers, as the unlockers: up or what failed, the time of the last check
+        w = Text(); w.append(f"{'web search':<10} ", style=C_TOOL)
+        ws = res.get("searchers") or []
+        if not ws:
+            w.append("not configured", style=C_MUTE)
+        for i, sr in enumerate(ws):
+            if i:
+                w.append("  ·  ", style=C_MUTE)
+            w.append(sr.get("provider", "?")).append(" ")
+            w.append("up", style=C_OK) if sr.get("ok") else w.append((sr.get("error") or "down")[:60], style=C_FAIL)
+            if sr.get("secs") is not None:
+                w.append(f" {sr['secs'] * 1000:.0f} ms", style=C_MUTE)
+        self.query_one("#row-websearch", Static).update(w)
         # Our own stage hosts below, one line per kind: up or down, checked on every scan (free).
         sts = res.get("stages") or []
         for kind, label, row in (("fetch-proxy", "proxy", "#row-proxy"), ("playwright", "playwright", "#row-playwright"), ("chrome", "chrome", "#row-chrome")):
@@ -1469,7 +1744,22 @@ class Ctl(App):
         if value is None or isinstance(value, type(NULL)):
             return
         event.select.clear()
+        if event.select.id == "client-select":   # a client: its name into the filter (the filter searches whole lines)
+            self.query_one("#filter", Input).value = str(value)
+            return
         await self.run_action(str(value))
+
+    def _refresh_clients(self, lines: list[str]) -> None:
+        """The Client menu: every client seen in the log so far, sorted; refilled when a new one appears."""
+        if not SHOW_CLIENT:
+            return
+        for ln in lines:
+            if (m := LINE.match(ln)):
+                self._client_seen.add(m.group("client"))
+        names = sorted(self._client_seen)
+        if names != self._clients:
+            self._clients = names
+            self.query_one("#client-select", Select).set_options([(n, n) for n in names])
 
     def action_nav(self, direction: int) -> None:
         """Left/right: move focus between the nav menus (wraps)."""
@@ -1603,7 +1893,8 @@ class Ctl(App):
             self._apply_filter()
         if f.value:
             f.value = ""   # Input.Changed rebuilds the pane
-        if isinstance(self.focused, Input):
+        # Off the filter field and the Client menu (which put its name there): neither stays highlighted
+        if isinstance(self.focused, Input) or (self.focused is not None and self.focused.id == "client-select"):
             self.query_one("#log-select", Select).focus()
 
     def action_mark(self) -> None:
@@ -1636,6 +1927,35 @@ class Ctl(App):
         self._matches = 0
         self._lines = 0
         self.notify("evidence.log erased", timeout=2.0)
+
+    def action_rotate(self) -> None:
+        """evidence.log → evidence-<date>-<time>.log beside it, as the servers rotate it at
+        5 MB (src/log.ts): the history is kept, the next line starts a fresh log (the
+        servers append by path). Its "!!" alerts go with it — an alert that is fixed but
+        was never cleared by an "ok" (a refusal in an older wording) stops degrading /status."""
+        if not LOG_FILE.is_file():
+            self.notify("no evidence.log to rotate", severity="warning", timeout=2.0)
+            return
+        stamp = time.strftime("%Y-%m-%d-%H%M%S")
+        dest = LOG_FILE.with_name(f"evidence-{stamp}.log")
+        n = 2
+        while dest.exists():
+            dest = LOG_FILE.with_name(f"evidence-{stamp}-{n}.log"); n += 1
+        try:
+            os.rename(LOG_FILE, dest)
+            LOG_FILE.touch()
+        except OSError as e:
+            self.notify(f"rotate failed: {e}", severity="error")
+            return
+        self._pos = 0
+        self._open_log()
+        self._alerts = Alerts()
+        self._log().clear()
+        self._raw.clear()
+        self._matches = 0
+        self._lines = 0
+        self._log().write_line(f"─── evidence.log rotated to {dest.name} ───")
+        self._publish_status()
 
     def action_refresh(self) -> None:
         self._start_scan()
@@ -1694,9 +2014,20 @@ class Ctl(App):
     def _publish_status(self) -> None:
         """Rebuild the JSON snapshot (event loop; the HTTP thread only reads it)."""
         try:
-            self._status_json = json.dumps(self._status_snapshot(), separators=(",", ":")).encode()
+            snap = self._status_snapshot()
         except Exception as e:  # pragma: no cover
-            self._status_json = json.dumps({"status": "degraded", "problems": [f"snapshot failed: {e}"]}).encode()
+            snap = {"status": "degraded", "problems": [f"snapshot failed: {e}"]}
+        self._status_json = json.dumps(snap, separators=(",", ":")).encode()
+        # The same verdict first on the server line: "healthy" green, else "degraded" red and what is
+        # wrong — the first problem in words, "+2 more" for the rest (all of them in /status).
+        pr = snap.get("problems") or []
+        h = Text("healthy", style=C_OK) if snap.get("status") == "ok" else \
+            Text("degraded", style=C_FAIL).append(f": {pr[0] if pr else '?'}" + (f" +{len(pr) - 1} more" if len(pr) > 1 else ""), style=C_MUTE)
+        try:
+            self.query_one("#health", Static).update(h)
+            self.query_one("#sep-health", Static).display = True
+        except Exception:
+            pass   # before compose
 
     def _status_snapshot(self) -> dict:
         now = time.time()
@@ -1713,6 +2044,7 @@ class Ctl(App):
         if vr.get("configured") and not vr.get("ok"):
             problems.append(f"verify model: {vr.get('error') or 'no answer'}")
         problems += [f"unlocker {ur.get('provider')}: {ur.get('error') or 'no answer'}" for ur in urs if not ur.get("ok")]
+        problems += [f"web search {sr.get('provider')}: {sr.get('error') or 'no answer'}" for sr in (res.get("searchers") or []) if not sr.get("ok")]
         sts = res.get("stages") or []
         problems += [f"stage {st.get('name')}: {st.get('error') or 'down'}" for st in sts if not st.get("up")]
         dk = res.get("disk")

@@ -1,5 +1,14 @@
 # Forever Healthy Evidence MCP — Change Log
 
+### v1.0.16 — 2026-11-17
+
+* **Support for Liquid AI:** its decision models (`d1-ultra`) for claim verification.
+* **Drug label search:** find FDA labels on DailyMed by drug name, with the set ID to add or read them.
+* **Improved Bright Data handling:** refused pages no longer raise alerts.
+* **Improved handling of refusing and slow sites:** a service that a site refuses or that keeps timing out there is skipped for a while.
+* **Improved web page conversion:** headings are kept complete.
+* **Improved log viewer:** a server line with the overall health, and disk usage on the storage line.
+
 ### v1.0.0 — 2026-11-11
 
 First public release.

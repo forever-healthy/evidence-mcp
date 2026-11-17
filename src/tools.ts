@@ -23,8 +23,11 @@ import { fetchAnswer, libraryFetch, libraryIdForUrl, logId } from "./urlfetch.js
 import { verifyCached } from "./verify/cache.js";
 import { bump, currentStats } from "./stats.js";
 import { compact, leanJson, readAnswer, searchAnswer, statusAnswer, verdictAnswer } from "./json.js";
-import { MAX_RESULTS as MAX_TRIALS, searchCacheDays, searchTrials, trialsLogId } from "./trials.js";
-import { logId as pubmedLogId, MAX_RESULTS as MAX_PAPERS, searchArticles } from "./pubmedsearch.js";
+import { MAX_RESULTS as MAX_TRIALS, searchCacheDays, searchTrials } from "./trials.js";
+import { MAX_RESULTS as MAX_PAPERS, searchArticles } from "./pubmedsearch.js";
+import { MAX_RESULTS as MAX_LABELS, searchLabels } from "./dailymedsearch.js";
+import { webSearch, webSearchConfigured } from "./websearch.js";
+import { citationsEnabled, citingArticles, MAX_RESULTS as MAX_CITING } from "./citations.js";
 import { recordSummary, resultsText } from "./trialrecord.js";
 import { fetchArticles, MAX_PMIDS } from "./pubmedbatch.js";
 import { freshMissing, missingNote, rememberMissing } from "./missing.js";
@@ -49,7 +52,7 @@ export const INSTRUCTIONS = `evidence-mcp keeps a local library of scientific pa
 IDs — always "type:value"
 - pmid:30955454 — a paper by PubMed ID. Bare digits are taken as a PMID.
 - doi:10.… — a paper by DOI. A DOI PubMed indexes is stored under its PMID; any other gets its record from Crossref.
-- dailymed:<set ID> — an FDA prescribing-information label, current version. The set ID is the "setid=" value in the label's DailyMed URL.
+- dailymed:<set ID> — an FDA prescribing-information label, current version. The set ID comes from fh_dailymed_search_labels, or is the "setid=" value in the label's DailyMed URL.
 - nct:05173896 — a ClinicalTrials.gov trial record, current version. NCT05173896 is accepted too.
 
 Tools
@@ -60,8 +63,9 @@ Tools
 - fh_verify_claim(claim, id) — does this one source state this one finding? A decision model judges the stored text and returns a verdict.
 - fh_pubmed_fetch_articles(pmids) — title, first author, year, publication types, retracted and level for up to 200 PMIDs at once; faster and far smaller than asking PubMed, known papers from disk, the rest in one request and stored. For abstract or full text: fh_library_read.
 - fh_pubmed_search_articles(query, max_results?, sort?, years?) — search PubMed in its own syntax: the total and rows in columns order (PMID, title, first author, year, journal, publication types, PMCID, library level); faster and far smaller than asking PubMed. Cached a week.
-- fh_clinicaltrials_search_studies(query | intervention | condition, status?, sort?, max_results?) — search ClinicalTrials.gov: the total and rows in columns order (NCT ID, title, status, phase, enrollment, dates, primary outcome, conditions, interventions, has_results). Cached a week.
-- fh_clinicaltrials_get_study_record(nct) — one trial as a review needs it (status, design, enrollment, dates, outcomes, eligibility, result publications, summary), from the stored record; added first when missing.
+${citationsEnabled() ? "- fh_pubmed_citing_articles(id, types?, years?, sort?, max_results?) — the papers that cite a paper (pmid: or doi:), as rows in fh_pubmed_search_articles' columns: follow-ups of a trial, later meta-analyses that include it, guidelines (sort: cited), comments on it (types comment, letter, editorial: PubMed's comments on the paper first, listed in comments_on). At most 100 rows, no paging: narrow with types or years. Cached a week.\n" : ""}- fh_clinicaltrials_search_studies(query | intervention | condition, status?, sort?, max_results?) — search ClinicalTrials.gov: the total and rows in columns order (NCT ID, title, status, phase, enrollment, dates, primary outcome, conditions, interventions, has_results). Cached a week.
+- fh_dailymed_search_labels(drug_name, labeler?, max_results?) — find FDA drug labels by generic or brand name: the total and rows in columns order (set ID, title, labeler, published, version, level), newest first; labeler narrows to one company. Use it rather than DailyMed's search page, which shows no set IDs as Markdown. Cached a week.
+${webSearchConfigured() ? "- fh_web_search(query, max_results?) — search the web; use it instead of the built-in web search. Links (title, URL, date, author) with a short passage from each page, not the page text, so a fraction of the context; read a result with fh_fetch_url. site: in the query restricts it to a site, as with any search engine. For more results, search again with other words. Cached locally for a week.\n" : ""}- fh_clinicaltrials_get_study_record(nct) — one trial as a review needs it (status, design, enrollment, dates, outcomes, eligibility, result publications, summary), from the stored record; added first when missing.
 - fh_clinicaltrials_get_study_results(nct, max_chars?) — a trial's posted results as Markdown, capped; the outcome titles listed for fh_library_read.
 - fh_fetch_url(url, max_length?, start_index?, raw?, title_only?) — a web page as Markdown, same call and same answer as the standard fetch tool ("Contents of <url>:" and the page, cut at max_length with a note on how to continue). Prefer it for every URL: a cached page answers from disk, a walled or script-rendered page runs through the browser and unlocker stages in one call. PDFs as Markdown; XML, JSON and other text as is. title_only returns the title line alone — enough to verify a link, at a few tokens.
 
@@ -473,9 +477,10 @@ export function registerTools(server: McpServer): void {
       if (!r.error && r.score !== null) bump("verify", cached);   // a judgement: from disk, or the model
       // Time first, padded so the columns line up ("  2.1s", " 13.1s"), then
       // the verdict, the basis, the score, "cached" when no model ran, and the whole claim (the provider is in fh_info and the TUI's decider line).
+      // The time when the model ran; "cached" in its place when the verdict came from disk (milliseconds).
       const secs = `${((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0")}s`;   // "00.7s", "13.7s": two digits before the dot, one space after the ID
       // An error is no verdict: "error <why>", not "verdict=error" — the model's service down, or a claim refused (2026-11-11).
-      log("verify", r.id, r.error ? `${modelFailure(r.error, cfg) ? "!! " : ""}${secs} ${"error".padEnd(20)} ${r.error} | ${claim}` : `${secs} verdict=${r.verdict.padEnd(12)} basis=${r.basis!.padEnd(9)} score=${r.score === null ? "-    " : r.score.toFixed(3)}${r.windows > 1 ? ` windows=${r.windows}` : ""}${cached ? " cached" : ""}${r.superseded ? " superseded" : ""}${r.glyphs_unresolved ? ` glyphs=${r.glyphs_unresolved}` : ""} | ${claim}`);
+      log("verify", r.id, r.error ? `${modelFailure(r.error, cfg) ? "!! " : ""}${secs} ${"error".padEnd(20)} ${r.error} | ${claim}` : `${cached ? "cached" : secs} verdict=${r.verdict.padEnd(12)} basis=${r.basis!.padEnd(9)} score=${r.score === null ? "-    " : r.score.toFixed(3)}${r.windows > 1 ? ` windows=${r.windows}` : ""}${r.superseded ? " superseded" : ""}${r.glyphs_unresolved ? ` glyphs=${r.glyphs_unresolved}` : ""} | ${claim}`);
       return { content: [{ type: "text" as const, text: verdictAnswer(r) }] };
     }
   );
@@ -555,7 +560,7 @@ export function registerTools(server: McpServer): void {
         const md = existsSync(file) ? readFileSync(file, "utf8") : "";
         const text = title_only ? `Contents of ${url}:\n${(md.split("\n").find((l) => l.trim()) ?? "").trim()}` : fetchAnswer(url, md, "", max_length, start_index);
         bump("fetch", had);
-        put(`library ${rid} ${had ? "cached" : "added"} chars=${text.length}${title_only ? " title" : maxLog}${start_index ? ` start=${start_index}` : ""}`);
+        put(`library ${rid} chars=${text.length}${title_only ? " title" : maxLog}${start_index ? ` start=${start_index}` : ""} ${had ? "cached" : "added"}`);
         return { content: [{ type: "text", text }] };
       }
       const r = await libraryFetch(FH_EVIDENCE_DIR, url, { max_length, start_index, raw, title_only }, `${pkg.name} ${pkg.version}`, {
@@ -565,10 +570,14 @@ export function registerTools(server: McpServer): void {
       const secs = ((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0") + "s";
       if (r.meta) bump("fetch", r.cached);   // a page or a stored failure: from disk, or the network
       if (r.ok) {
-        put(`${r.cached ? "cached" : `fetched ${secs}`} ${r.meta.format} retrieved_by=${r.meta.retrieved_by} fetched=${r.meta.fetched} chars=${r.text.length}${raw ? " raw" : ""}${title_only ? " title" : maxLog}${start_index ? ` start=${start_index}` : ""}`);
+        // "ok", then the time — or "cached" in its place when nothing went out, as on a verify or search line
+        put(`ok ${r.cached ? "cached" : secs} ${r.meta.format} retrieved_by=${r.meta.retrieved_by} fetched=${r.meta.fetched} chars=${r.text.length}${raw ? " raw" : ""}${title_only ? " title" : maxLog}${start_index ? ` start=${start_index}` : ""}`);
         return { content: [{ type: "text", text: r.text }] };
       }
-      put(`${r.cached ? "cached failure" : `failed ${secs}`}: ${r.error.replace(url, "<url>")}`);
+      // The agent gets the standard fetch tool's words ("Failed to fetch <url> - status code 404"); the log,
+      // whose line says failed and ends with the URL, only the reason: "failed: HTTP 404", "failed: invalid URL".
+      const why = r.error.replace(url, "<url>").replace(/^Failed to fetch <url> - status code (\d+)$/, "HTTP $1").replace(/^Failed to fetch <url>: /, "");
+      put(`failed ${r.cached ? "cached" : secs}: ${why}`);
       return { content: [{ type: "text", text: r.error }], isError: true };
     }
   );
@@ -588,7 +597,8 @@ export function registerTools(server: McpServer): void {
       if (r.cached) bump("pubmed", true, r.cached);
       if (r.new) bump("pubmed", false, r.new);
       const secs = ((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0") + "s";
-      log("pubmed", `pmids:${r.rows.length}`, `articles ${secs} cached=${r.cached} new=${r.new}${r.not_found ? ` not_found=${r.not_found}` : ""}${r.invalid ? ` invalid=${r.invalid}` : ""}`);
+      // The time only when PubMed was asked: every PMID from disk answers in milliseconds.
+      log("pubmed", `pmids:${r.rows.length}`, `articles ${r.asked ? `${secs} ` : ""}cached=${r.cached} new=${r.new}${r.not_found ? ` not_found=${r.not_found}` : ""}${r.invalid ? ` invalid=${r.invalid}` : ""}`);
       return { content: [{ type: "text" as const, text: compact({ columns: r.columns, rows: r.rows }) }] };
     }
   );
@@ -608,11 +618,41 @@ export function registerTools(server: McpServer): void {
       const t0 = Date.now();
       const r = await searchArticles(args, FH_EVIDENCE_DIR);
       const secs = ((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0") + "s";
-      if (!r.ok) { log("search", "pm:-", `error: ${r.error}`); return { content: [{ type: "text" as const, text: compact({ error: r.error }) }], isError: true }; }
+      if (!r.ok) { log("search", "pubmed", `${r.input ? "error" : `failed ${secs}`} ${r.error} | ${args.query}`); return { content: [{ type: "text" as const, text: compact({ error: r.error }) }], isError: true }; }
       bump("search", r.cached);
       const q = r.result.query;
-      log("search", `pm:${pubmedLogId(q)}`, `${r.cached ? "cached" : `searched ${secs}`} rows=${r.result.rows.length} total=${r.result.total}${q.sort !== "relevance" ? ` sort=${q.sort}` : ""}${q.years ? ` years=${q.years}` : ""} | ${q.query}`);
+      log("search", "pubmed", `ok ${r.cached ? "cached" : secs} rows=${r.result.rows.length} total=${r.result.total}${q.sort !== "relevance" ? ` sort=${q.sort}` : ""}${q.years ? ` years=${q.years}` : ""} | ${q.query}`);   // "cached" where the time would be: no request went out
       return { content: [{ type: "text" as const, text: searchAnswer(r.result) }] };
+    }
+  );
+
+  // fh_pubmed_citing_articles(id, types?, years?, sort?, max_results?) — development
+  // only, offered with FH_CITATIONS_ENABLED (#75); src/citations.ts.
+  if (citationsEnabled()) server.tool(
+    "fh_pubmed_citing_articles",
+    `The papers that cite a paper, as rows in fh_pubmed_search_articles' columns: PMID, title, first author, year, journal, publication types, PMCID, library level. Use it for a trial's follow-ups, later meta-analyses that include it, guidelines (sort: cited) and comments on it.
+- types: PubMed publication types, any of them; a paper without one (many plain articles, some guidelines) never matches.
+- Comments: with comment, letter or editorial in types, the comments PubMed links to the paper come first, of any year and type, and comments_on lists their PMIDs. The other rows only cite the paper and are mostly about something else.
+- years and sort newest go by the year column.
+- At most ${MAX_CITING} rows, no paging: for more, narrow with types or years, or sort: cited. total counts every match.
+Citations from OpenAlex. Cached ${searchCacheDays()} days.`,
+    {
+      id: z.string().describe('The cited paper: "pmid:18378520" or "doi:10.1056/NEJMoa0801317".'),
+      types: z.array(z.string()).optional().describe('Publication types, any of them: "meta-analysis", "systematic review", "randomized controlled trial", "review", "guideline", "comment", "letter", "editorial".'),
+      years: z.string().optional().describe('Publication years of the citing papers, as in the year column: "2020-2026", "2022-", "-2019" or "2022". Not applied to the comments PubMed links.'),
+      sort: z.enum(["newest", "cited"]).default("newest").describe("newest (latest year first) or cited (most cited first)."),
+      max_results: z.number().int().min(1).max(MAX_CITING).default(20).describe("Rows to return (1–100)."),
+    },
+    async (args) => {
+      const t0 = Date.now();
+      const r = await citingArticles(args, FH_EVIDENCE_DIR);
+      const secs = ((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0") + "s";
+      if (!r.ok) { log("search", "citing", `${r.input ? "error" : `failed ${secs}`} ${r.error} | ${args.id}`); return { content: [{ type: "text" as const, text: compact({ error: r.error }) }], isError: true }; }
+      bump("search", r.cached);
+      const q = r.result.query;
+      log("search", "citing", `ok ${r.cached ? "cached" : secs} rows=${r.result.rows.length} total=${r.result.total}${r.result.comments_on ? ` comments_on=${r.result.comments_on.length}` : ""}${q.types ? ` types=${q.types.join(",")}` : ""}${q.years ? ` years=${q.years}` : ""}${q.sort !== "newest" ? ` sort=${q.sort}` : ""} | ${q.id}`);
+      const { total, comments_on, columns, rows } = r.result;
+      return { content: [{ type: "text" as const, text: compact({ total, comments_on, columns, rows }) }] };
     }
   );
 
@@ -631,10 +671,55 @@ export function registerTools(server: McpServer): void {
       const t0 = Date.now();
       const r = await searchTrials(args, FH_EVIDENCE_DIR);
       const secs = ((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0") + "s";
-      if (!r.ok) { log("search", "ct:-", `error: ${r.error}`); return { content: [{ type: "text" as const, text: compact({ error: r.error }) }], isError: true }; }
+      if (!r.ok) { log("search", "nct", `${r.input ? "error" : `failed ${secs}`} ${r.error}${((t) => t ? ` | ${t}` : "")([args.query, args.intervention, args.condition].map((v) => v?.trim()).filter(Boolean).join(" "))}`); return { content: [{ type: "text" as const, text: compact({ error: r.error }) }], isError: true }; }
       bump("search", r.cached);
       const q = r.result.query, parts = [q.intervention && `intervention=${q.intervention}`, q.condition && `condition=${q.condition}`, q.query && `query=${q.query}`].filter(Boolean).join(" ");
-      log("search", `ct:${trialsLogId(q)}`, `${r.cached ? "cached" : `searched ${secs}`} rows=${r.result.rows.length} total=${r.result.total} status=${q.status}${q.sort !== "relevance" ? ` sort=${q.sort}` : ""} | ${parts}`);
+      log("search", "nct", `ok ${r.cached ? "cached" : secs} rows=${r.result.rows.length} total=${r.result.total} status=${q.status}${q.sort !== "relevance" ? ` sort=${q.sort}` : ""} | ${parts}`);
+      return { content: [{ type: "text" as const, text: searchAnswer(r.result) }] };
+    }
+  );
+
+  // fh_web_search(query, max_results?) — development only: offered only with
+  // FH_WEB_SEARCH_ENABLED=true and a provider configured
+  // (FH_WEB_SEARCH_<PROVIDER>_API_KEY); src/websearch.ts.
+  if (webSearchConfigured()) server.tool(
+    "fh_web_search",
+    `Search the web — use it instead of the built-in web search. It returns links (title, URL, date, author) with a short passage from each page, not the page text, so it costs a fraction of the context; read a result with fh_fetch_url. It finds more, especially within one site: restrict it with site: in the query, as with any search engine ("metformin site:nih.gov", several with "(site:nih.gov OR site:who.int)"), a restriction the built-in search often ignores. Each search returns all it finds; for more, search again with other words. Searches are cached locally for ${searchCacheDays()} days; a repeated search is answered in milliseconds.`,
+    {
+      query: z.string().describe('The query, site: terms included: "metformin site:nih.gov", "statin muscle pain".'),
+      max_results: z.number().int().min(1).optional().describe("At most this many rows; unset: all the search finds."),
+    },
+    async (args) => {
+      const t0 = Date.now();
+      const r = await webSearch(args, FH_EVIDENCE_DIR, undefined, undefined, (line) => log("search", "web", `${line} | ${args.query}`));
+      const secs = ((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0") + "s";
+      if (!r.ok) { log("search", "web", `${r.input ? "error" : `failed ${secs}`} ${r.error} | ${args.query}`); return { content: [{ type: "text" as const, text: compact({ error: r.error }) }], isError: true }; }
+      bump("search", r.cached);
+      const q = r.result.query;
+      const per = Object.entries(r.result.providers).map(([n, v]) => `${n}=${typeof v === "number" ? v : "failed"}`).join(" ");   // a provider that failed: the others answered
+      log("search", "web", `ok ${r.cached ? "cached" : secs} rows=${r.result.rows.length}${r.result.rows.length < r.result.total ? ` of ${r.result.total}` : ""} ${per} | ${q.query}${q.sites ? " " + q.sites.map((d) => `site:${d}`).join(" ") : ""}`);
+      return { content: [{ type: "text" as const, text: searchAnswer({ total: r.result.total, columns: r.result.columns, rows: r.result.rows }) }] };
+    }
+  );
+
+  // fh_dailymed_search_labels(drug_name, labeler?, max_results?) — FDA drug labels by
+  // name: the set ID for dailymed:<set ID> in one call (src/dailymedsearch.ts).
+  server.tool(
+    "fh_dailymed_search_labels",
+    `Find FDA drug labels on DailyMed by drug name, generic or brand: the total and up to ${MAX_LABELS} rows as arrays in columns order — set ID, title (drug and form), labeler (the company), published date, version, and the library level when the label is already stored. Newest first. A generic name lists every maker's label; labeler narrows to one company ("Boehringer" for Micardis's maker), a brand name to its own labels. Pass the set ID as "dailymed:<set ID>" to fh_library_read or fh_library_add. Use this, not DailyMed's search page: fetched as Markdown the page shows no set IDs, raw it is some 150,000 characters. The same search is answered from disk for ${searchCacheDays()} days.`,
+    {
+      drug_name: z.string().describe('Generic or brand name: "telmisartan", "Micardis".'),
+      labeler: z.string().optional().describe("Part of the company's name, to narrow to its labels: \"Boehringer\"."),
+      max_results: z.number().int().min(1).max(MAX_LABELS).default(20).describe("Rows to return (1–100)."),
+    },
+    async (args) => {
+      const t0 = Date.now();
+      const r = await searchLabels(args, FH_EVIDENCE_DIR);
+      const secs = ((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0") + "s";
+      if (!r.ok) { log("search", "dailymed", `${r.input ? "error" : `failed ${secs}`} ${r.error}${args.drug_name?.trim() ? ` | ${args.drug_name.trim()}` : ""}`); return { content: [{ type: "text" as const, text: compact({ error: r.error }) }], isError: true }; }
+      bump("search", r.cached);
+      const q = r.result.query;
+      log("search", "dailymed", `ok ${r.cached ? "cached" : secs} rows=${r.result.rows.length} total=${r.result.total} | ${q.drug_name}${q.labeler ? ` labeler=${q.labeler}` : ""}`);
       return { content: [{ type: "text" as const, text: searchAnswer(r.result) }] };
     }
   );
@@ -642,13 +727,14 @@ export function registerTools(server: McpServer): void {
   // fh_clinicaltrials_get_study_record(nct) / _get_study_results(nct, max_chars?) — thin answers
   // over the stored nct: entry (added first when missing): the review's detail
   // of one trial, and its posted results (src/trialrecord.ts).
-  const nctEntry = async (id: string): Promise<{ paths: EntryPaths; requested: string } | { error: string }> => {
+  const nctEntry = async (id: string): Promise<{ paths: EntryPaths; requested: string; added: boolean } | { error: string }> => {
     const p = parseId(/^\d{8}$/.test(id.trim()) ? `nct:${id.trim()}` : id);
     if (p.error) return { error: p.error };
     if (p.type !== "nct") return { error: `not a trial ID: ${p.requested}` };
     const paths = entryPaths(FH_EVIDENCE_DIR, p.type!, p.id!);
-    if (!entryExists(paths)) { const r = await addEntry(p.requested); const s = JSON.parse(r.content[0].text) as Status; if (s.error) return { error: s.error }; }
-    return { paths, requested: p.requested };
+    const added = !entryExists(paths);
+    if (added) { const r = await addEntry(p.requested); const s = JSON.parse(r.content[0].text) as Status; if (s.error) return { error: s.error }; }
+    return { paths, requested: p.requested, added };
   };
   server.tool(
     "fh_clinicaltrials_get_study_record",
@@ -661,7 +747,8 @@ export function registerTools(server: McpServer): void {
       const raw = e.paths.fulltextRaw("json");
       const r = existsSync(raw) ? recordSummary(readFileSync(raw, "utf8")) : null;
       if (!r) { log("trials", e.requested, "record error: no stored record"); return { content: [{ type: "text" as const, text: compact({ error: "no stored record" }) }], isError: true }; }
-      log("trials", e.requested, `record ${((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0")}s ${r.status ?? ""}${r.has_results ? " results" : ""} | ${r.title}`);
+      // A time only when the trial was downloaded first: a stored record answers in milliseconds.
+      log("trials", e.requested, `record ${e.added ? `${((Date.now() - t0) / 1000).toFixed(1).padStart(4, "0")}s ` : ""}${r.status ?? ""}${r.has_results ? " results" : ""} | ${r.title}`);
       return { content: [{ type: "text" as const, text: leanJson(r) }] };
     }
   );

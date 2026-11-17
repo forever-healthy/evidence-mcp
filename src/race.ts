@@ -6,7 +6,7 @@
 //   try <name>                 when it starts
 //   ok <name> / failed <name>: <reason>   when it returns by itself
 //   aborted <name>: <why>      when another request of its stage decided it
-//                              ("zyte won", "zyte: HTTP 404"); it is cancelled
+//                              ("zyte won", "fetch had HTTP 404"); it is cancelled
 //                              then — the browser tab closed, the connection dropped
 //   abandoned <name>: server stopped   when the server exits while it runs
 // So no "try" stays without its end, and the log tells what became of each.
@@ -45,7 +45,7 @@ export type Task<T> = { name: string; go: () => Promise<T>; abort: (why: string)
 
 // Run a stage's tasks at once. Resolves with the first ok result — the rest are
 // aborted ("<winner> won") — or, when a result is decisive (a 404 or 410: the
-// page is not there), with no winner, the rest aborted ("<name>: <reason>");
+// page is not there), with no winner, the rest aborted ("<name> had <reason>");
 // else, when all failed, with every result in task order. A task never rejects
 // (its failure is a result with ok: false).
 export async function firstOk<T extends { ok: boolean }>(tasks: Task<T>[], decisive: (r: T) => string | null = () => null): Promise<{ won: T | null; results: T[] }> {
@@ -65,7 +65,7 @@ export async function firstOk<T extends { ok: boolean }>(tasks: Task<T>[], decis
         if (done) return;
         const gone = r.ok ? null : decisive(r);
         if (r.ok) end(r, `${task.name} won`);
-        else if (gone) end(null, `${task.name}: ${gone}`);
+        else if (gone) end(null, `${task.name} had ${gone}`);   // "fetch had HTTP 404": the other's answer, not this request's
         else if (--left === 0) { done = true; resolve({ won: null, results }); }
       });
     });

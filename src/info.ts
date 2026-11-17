@@ -1,3 +1,4 @@
+import { webSearchConfig, webSearchConfigured } from "./websearch.js";
 import { browserStages, stageName, type BrowserStage, PLAYWRIGHT_VERSION } from "./browser.js";
 import { fetchProxy, fetchProxyName, type FetchProxy } from "./fetchproxy.js";
 import { unlockerConfigured, unlockers } from "./unlock.js";
@@ -24,6 +25,7 @@ export type Info = {
   // fh_verify_claim's decision model; null: the tool answers error. ok, ms and
   // error come from one tiny request when fh_info is called.
   verify: { provider: string; model: string; base_url: string; local: boolean; ok?: boolean; ms?: number; error?: string | null } | null;
+  web_search?: string[];   // the providers behind fh_web_search (every one with a key); absent: the tool is not offered (development only, FH_WEB_SEARCH_ENABLED)
   unlockers: { provider: string; ok?: boolean; ms?: number; error?: string | null }[];
   stages: { name: string; host: string; port: number; up?: boolean; ms?: number; error?: string | null }[];   // our own stage hosts (fetch proxy, Playwright, Chrome) and whether each answers (filled by fh_info)   // the last download stages in the order tried, and whether each answers (filled by fh_info)
   entries: number;
@@ -63,10 +65,12 @@ export function libraryInfo(libraryDir: string, host: string, tiers: ResolvedTie
     tiers: tiers.all, config: { ...settings(), problems: [...tiers.problems, ...verifyProblems()], sources: sources() },
     download: downloadInfo(),
     verify: verifyInfo(),
+    ...(webSearchConfigured() ? { web_search: webSearchConfig().map((c) => c.provider) } : {}),
     unlockers: unlockers().map((provider) => ({ provider })),
     stages: ownStages(),
     entries: 0, size_bytes: 0, size: "", by_type: {}, by_level: {}, types: {}, retracted: 0, not_citable: 0, errata: 0, concerns: 0, updates: 0,
   };
+
   for (const type of existsSync(libraryDir) ? readdirSync(libraryDir) : []) {
     const typeDir = join(libraryDir, type);
     if (!statSync(typeDir).isDirectory()) continue;

@@ -30,7 +30,7 @@ export const COLUMNS = ["pmid", "title", "first_author", "year", "publication_ty
 // level: abstract | full_text | title (nothing to read) | not found (PubMed has no such record — remembered for
 // retry_after_days, src/missing.ts) | invalid (not a PMID: PubMed IDs have at most eight digits)
 export type Row = [string, string | null, string | null, string | null, string | null, boolean | null, string];
-export type BatchResult = { columns: typeof COLUMNS; rows: Row[]; new: number; cached: number; not_found: number; invalid: number };
+export type BatchResult = { columns: typeof COLUMNS; rows: Row[]; new: number; cached: number; not_found: number; invalid: number; asked: number };   // asked: PMIDs requested from PubMed (0: all from disk)
 
 const EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi";
 export function efetchBatchUrl(pmids: string[]): string {
@@ -61,7 +61,7 @@ const row = (pmid: string, s: Status | null, level: string): Row =>
 export type Fetch = (url: string) => Promise<string>;
 
 export async function fetchArticles(ids: string[], libraryDir = FH_EVIDENCE_DIR, converter = "evidence-mcp", fetchImpl: Fetch = fetchText): Promise<BatchResult> {
-  const result: BatchResult = { columns: COLUMNS, rows: [], new: 0, cached: 0, not_found: 0, invalid: 0 };
+  const result: BatchResult = { columns: COLUMNS, rows: [], new: 0, cached: 0, not_found: 0, invalid: 0, asked: 0 };
   // Parse and dedupe, keeping the input order; a row per distinct PMID.
   const order: string[] = []; const invalid = new Map<string, string>();
   for (const raw of ids.slice(0, MAX_PMIDS)) {
@@ -75,6 +75,7 @@ export async function fetchArticles(ids: string[], libraryDir = FH_EVIDENCE_DIR,
   const missing = order.filter((k) => !invalid.has(k) && !status(k) && !known(k));
   let records = new Map<string, string>();
   if (missing.length) records = splitArticles(await fetchImpl(efetchBatchUrl(missing)));
+  result.asked = missing.length;
   for (const k of order) {
     if (invalid.has(k)) { result.rows.push(row(k, null, "invalid")); result.invalid++; continue; }
     let s = status(k);

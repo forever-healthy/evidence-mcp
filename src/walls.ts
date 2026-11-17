@@ -16,7 +16,31 @@ import { FH_EVIDENCE_DIR } from "./layout.js";
 // One file per host under .walls/ (walls/ until 2026-11-13: bookkeeping, hidden like .servers and .browser), {"<stage>": {"streak": n, "date": "…", "reason": "…"}};
 // written atomically, last writer wins — a lost streak count only costs a try.
 
-const WALL = /^(challenge not cleared|empty response)/i;
+// Bright Data's refusal of the page for robots.txt or a captcha ("challenge not cleared (captcha)") is a wall too
+// (live 2026-11-13–15: Wiley 31 refusals, each try a paid request and an alert until 1.0.1).
+// Zyte's "HTTP 520 Website Ban" likewise, after the first one (live: Wiley 48 bans, SAGE 30, 0 ok).
+// A timeout on the page too — an unlocker's ("timeout", "The operation was aborted due to timeout"),
+// the fetch proxy's, a browser's page load ("navigation: page.goto: Timeout 20000ms"); not a browser
+// server's connect timeout, which is our own host (src/hosts.ts). Live 2026-11-07–15: after a ZenRows
+// timeout the next on the same site timed out too 92 times in 100 (Wiley 48, SAGE 30, Europe PMC
+// 15 — none ever ok), the fetch proxy's 74, Chrome's 84; Bright Data's alternate with successes
+// (Europe PMC 4 timeouts, 8 ok), which two in a row and a success clearing it allow for.
+const TIMEOUT = "timeout\\b|The operation was aborted due to timeout|navigation: page\\.goto: Timeout \\d+ms";
+// The Bright Data words before 1.0.1 ("page refused: …") still match, for walls stored with them.
+const WALL = new RegExp(`^(challenge not cleared|empty response|HTTP 520 Website Ban|robots\\.txt restricts|page refused: .*(robots\\.txt|captcha|protection page|: 403)|${TIMEOUT})`, "i");
+// A robots.txt refusal is a rule for some paths, not the site (Wiley and SAGE refuse only their
+// /doi/full-xml/ mining endpoint, whose sign-in redirect robots.txt restricts; their open PDFs
+// are not affected): recorded under the stage and the URL's first two path segments,
+// "brightdata /doi/full-xml". Every other wall stays per site: a browser challenge covers the
+// whole site (live 2026-11-07–15: core.ac.uk 31 walls on 15 papers, 0 ok; OUP 26 on 11, 0 ok) —
+// per path it would cost two tries a paper instead of two a site.
+const ROBOTS = /^(robots\.txt restricts|page refused: .*robots\.txt)/i;
+// A rule, not chance — the service says it will not fetch this: a wall after the first refusal.
+// Judged by the stored reason, so a streak of one recorded before this rule counts too.
+const RULE = /^(HTTP 520 Website Ban|robots\.txt restricts|page refused: .*robots\.txt)/i;
+const pathKey = (url: string, stage: string) => {
+  try { return `${stage} /${new URL(url).pathname.split("/").filter(Boolean).slice(0, 2).join("/")}`; } catch { return stage; }
+};
 export const WALL_STREAK = 2;
 
 type Rec = { streak: number; date: string; reason: string };
@@ -34,8 +58,9 @@ function read(dir: string, h: string): Record<string, Rec> {
 export function walled(url: string, stage: string, dir = FH_EVIDENCE_DIR): Rec | null {
   const h = host(url); if (!h) return null;
   const all = read(dir, h);
-  const r = all[stage] ?? all[legacy(stage)];   // a wall recorded under the old name "browser <label>" still counts
-  return r && r.streak >= WALL_STREAK && daysSince(r.date) < settings().retry_after_days ? r : null;
+  const live = (r?: Rec) => r && (r.streak >= WALL_STREAK || RULE.test(r.reason)) && daysSince(r.date) < settings().retry_after_days ? r : null;
+  return live(all[stage] ?? all[legacy(stage)])   // a wall recorded under the old name "browser <label>" still counts
+    ?? live(all[pathKey(url, stage)]);
 }
 
 // After a stage ran: a wall extends the streak, a success clears it, any other
@@ -47,7 +72,9 @@ export function recordStage(url: string, stage: string, ok: boolean, reason = ""
   const all = read(dir, h);
   const lk = legacy(stage);
   if (lk !== stage && all[lk]) { all[stage] ??= all[lk]; delete all[lk]; }   // a wall under the old name moves to the new one
-  if (ok) { if (!all[stage]) return; delete all[stage]; }
+  const pk = pathKey(url, stage);
+  if (ok) { if (!all[stage] && !all[pk]) return; delete all[stage]; delete all[pk]; }
+  else if (ROBOTS.test(why)) all[pk] = { streak: (all[pk]?.streak ?? 0) + 1, date: now(), reason: why };
   else all[stage] = { streak: (all[stage]?.streak ?? 0) + 1, date: now(), reason: why };
   try { mkdirSync(join(dir, ".walls"), { recursive: true }); writeAtomic(file(dir, h), JSON.stringify(all) + "\n"); } catch { /* a courtesy */ }
 }

@@ -15,7 +15,13 @@ import { timeoutOr } from "../race.js";
 const TIMEOUT_MS = 60_000;   // as every unlocker (src/unlock/brightdata.ts)
 const ACCOUNT = new Set([401, 402, 403, 429]);
 
+// A timeout reads "timeout", as Bright Data and the fetch stages say it (not "The operation was aborted due to timeout").
 export async function get(url: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<Unlocked> {
+  try { return await request(url, fetchImpl, signal); }
+  catch (e) { throw (e as Error)?.name === "TimeoutError" ? new Error("timeout") : e; }
+}
+
+async function request(url: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<Unlocked> {
   const key = process.env.FH_ZENROWS_API_KEY?.trim();
   if (!key) throw new Error("not configured");
   const r = await fetchImpl(`https://api.zenrows.com/v1/?apikey=${encodeURIComponent(key)}&url=${encodeURIComponent(url)}&mode=auto`, { signal: timeoutOr(TIMEOUT_MS, signal) });

@@ -38,11 +38,15 @@ export const VARIABLES = [
   "FH_VERIFY_PERPLEXITY_MODEL", "FH_VERIFY_PERPLEXITY_URL", "FH_VERIFY_PERPLEXITY_API_KEY",
   "FH_VERIFY_GOOGLE_MODEL", "FH_VERIFY_GOOGLE_URL", "FH_VERIFY_GOOGLE_API_KEY",
   "FH_VERIFY_OPENAI_MODEL", "FH_VERIFY_OPENAI_URL", "FH_VERIFY_OPENAI_API_KEY",
+  "FH_VERIFY_LIQUID_MODEL", "FH_VERIFY_LIQUID_URL", "FH_VERIFY_LIQUID_API_KEY",
   "FH_VERIFY_MODEL", "FH_VERIFY_URL", "FH_VERIFY_API_KEY", "FH_VERIFY_THRESHOLD", "FH_VERIFY_TIMEOUT_SECS",
   "FH_RETRY_AFTER_DAYS", "FH_RETRY_BLOCKED", "FH_REFRESH_AFTER_DAYS", "FH_SEARCH_CACHE_DAYS",
-  "FH_NCBI_API_KEY", "FH_ZENROWS_API_KEY", "FH_ZYTE_API_KEY", "FH_BRIGHTDATA_API_KEY", "FH_BRIGHTDATA_ZONE",
+  "FH_NCBI_API_KEY", "FH_WEB_SEARCH_ENABLED", "FH_WEB_SEARCH_EXA_API_KEY", "FH_WEB_SEARCH_SERPER_API_KEY", "FH_WEB_SEARCH_BRAVE_API_KEY", "FH_WEB_SEARCH_SNIPPETS", "FH_WEB_SEARCH_TIMEOUT_SECS", "FH_CITATIONS_ENABLED", "FH_OPENALEX_API_KEY", "FH_ZENROWS_API_KEY", "FH_ZYTE_API_KEY", "FH_BRIGHTDATA_API_KEY", "FH_BRIGHTDATA_ZONE",
 ] as const;
-export const sources = (env: NodeJS.ProcessEnv = process.env): Record<string, Source> => Object.fromEntries(VARIABLES.map((v) => [v, sourceOf(v, env)]));
+// Development-only features (web search, citations) are not named at all while their switch is off.
+const on = (v: string | undefined) => /^(true|1|yes|on)$/i.test(v?.trim() ?? "");
+const hidden = (v: string, env: NodeJS.ProcessEnv) => (v.startsWith("FH_WEB_SEARCH_") && !on(env.FH_WEB_SEARCH_ENABLED)) || (v === "FH_CITATIONS_ENABLED" && !on(env.FH_CITATIONS_ENABLED));
+export const sources = (env: NodeJS.ProcessEnv = process.env): Record<string, Source> => Object.fromEntries(VARIABLES.filter((v) => !hidden(v, env)).map((v) => [v, sourceOf(v, env)]));
 
 export type Settings = { retry_after_days: number; retry_blocked: boolean; refresh_after_days: number; search_cache_days: number };
 export function settings(env: NodeJS.ProcessEnv = process.env): Settings {

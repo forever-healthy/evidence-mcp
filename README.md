@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/badge/Version-1.0.0-green.svg)
+![Version](https://img.shields.io/badge/Version-1.0.16-green.svg)
 ![License MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 [![Forever Healthy](https://img.shields.io/badge/(c)_2026-Forever_Healthy-573D7D.svg)](https://forever-healthy.org)
 [![npm](https://img.shields.io/badge/npm-evidence--mcp-cb3837.svg)](https://www.npmjs.com/package/evidence-mcp)
@@ -14,7 +14,7 @@ Toolset:
 
 - A self-building local library of sources: PMID, DOI, DailyMed, NCT
 - Decider-based claim verification against those sources
-- Optimized access to PubMed & ClinicalTrials.gov 
+- Optimized access to PubMed, ClinicalTrials.gov & DailyMed
 - Optimized web fetch. 
 
 All functions are token-optimized to minimize context use, return agent-ready content, and cache locally for fast responses. The MCP is self-explanatory to agents, so they can start using it right away with no coding required.
@@ -39,7 +39,7 @@ Released under the MIT license to empower, simplify, and speed up medical litera
 - Fast verification of claims against library sources using decider models
 - Automatic choice of abstract or full text, depending on availability
 - Local caching for repeat queries: a cached verdict in under 1 ms vs. ~1 s from the model
-- Support for Perplexity, Google, and OpenAI decision models
+- Support for Perplexity, Google, OpenAI, and Liquid AI decision models
 
 ### Optimized PubMed Access
 
@@ -50,6 +50,12 @@ Released under the MIT license to empower, simplify, and speed up medical litera
 
 - Up to 98% fewer tokens than other ClinicalTrials.gov MCPs (Anthropic's, cyanheads'): a trial record ~97% smaller, a search ~40% smaller than Anthropic's
 - Local caching: a repeated query in milliseconds instead of a second
+
+### Optimized DailyMed Access
+
+- FDA drug labels found by generic or brand name, narrowed to one manufacturer if needed: set ID, manufacturer, date and version per label
+- 98% fewer tokens than DailyMed's search page
+- Local caching: a repeated query in milliseconds
 
 ### Optimized Web Fetch
 
@@ -85,17 +91,18 @@ Released under the MIT license to empower, simplify, and speed up medical litera
 
 | Tool | |
 |---|---|
+| `fh_info()` | version, library counts by type and level, sources, browsers, decider, configuration, cache hits |
 | `fh_library_add(id)` | download and store one record — `pmid:`, `doi:` (paper), `dailymed:` (FDA drug label), `nct:` (trial record); a paper with its full text wherever it can be obtained |
 | `fh_library_status(id)` | the status of one record (level, citable, corrections) |
 | `fh_library_read(id, section?, query?, max_chars?, max_hits?)` | the outline, one section or the passages matching a query; adds a missing record first |
 | `fh_verify_claim(claim, id)` | does this source state this claim? A verdict from the decider, on full text or abstract; adds a missing record first |
-| `fh_fetch_url(url, max_length?, start_index?, raw?, title_only?)` | a web page or PDF as Markdown (XML, JSON and other text as is), cached, through the download cascade; same answer as the standard fetch tool |
 | `fh_pubmed_search_articles(query, max_results?, sort?, years?)` | search PubMed in its own syntax: PMID, title, first author, year, journal, publication types, PMCID, library level |
 | `fh_pubmed_fetch_articles(pmids)` | title, first author, year, publication types, retracted and level for up to 200 PMIDs at once |
 | `fh_clinicaltrials_search_studies(query \| intervention \| condition, status?, sort?, max_results?)` | search ClinicalTrials.gov: NCT ID, title, status, phase, enrollment, dates, primary outcome, conditions, interventions |
 | `fh_clinicaltrials_get_study_record(nct)` | one trial as a review needs it: status, design, enrollment, dates, outcomes, eligibility, result publications |
 | `fh_clinicaltrials_get_study_results(nct, max_chars?)` | a trial's posted results as Markdown, capped |
-| `fh_info()` | version, library counts by type and level, sources, browsers, decider, configuration, cache hits |
+| `fh_dailymed_search_labels(drug_name, labeler?, max_results?)` | find FDA drug labels by name: set ID, title, manufacturer, published date, version |
+| `fh_fetch_url(url, max_length?, start_index?, raw?, title_only?)` | a web page or PDF as Markdown (XML, JSON and other text as is), cached, through the download cascade; same answer as the standard fetch tool |
 
 
 ## Quick Start
@@ -115,7 +122,7 @@ Released under the MIT license to empower, simplify, and speed up medical litera
 
 A `.env` elsewhere than your project root: add `"--env", "/path/to/.env"` to `args`.
 
-Works out of the box with the keyless sources (PubMed, PMC, Europe PMC, Unpaywall, OpenAlex, plain fetch); only claim verification needs a Perplexity, Google, or OpenAI key, or a local Decider.
+Works out of the box with the keyless sources (PubMed, PMC, Europe PMC, Unpaywall, OpenAlex, plain fetch); only claim verification needs a Perplexity, Google, OpenAI, or Liquid AI key, or a local Decider.
 
 **Configuration** (optional)
 
@@ -124,10 +131,11 @@ Works out of the box with the keyless sources (PubMed, PMC, Europe PMC, Unpaywal
 
 **Decider Model** (optional, for claim verification)
 
-- Choose the provider with `FH_VERIFY_PROVIDER` (`perplexity`, `google`, or `openai`)
+- Choose the provider with `FH_VERIFY_PROVIDER` (`perplexity`, `google`, `openai`, or `liquid`); which one to take: [Decision models compared](docs/deciders.md)
 - Perplexity: set your [Perplexity API key](https://docs.perplexity.ai) or set up a local [Perplexity Decider for Mac](https://docs.perplexity.ai/docs/decisions/decider-for-mac)
 - Google: set your [Google AI Studio API key](https://aistudio.google.com/apikey); the free tier allows 50,000 input tokens per minute (one or two full-text papers), and on it Google may use what is sent to improve its products (the paid tier does not)
 - OpenAI: set your [OpenAI API key](https://platform.openai.com/api-keys)
+- Liquid AI: set your [Liquid API key](https://console.liquid.ai); the default model is `d1-ultra`
 
 **Download Cascade** (optional)
 

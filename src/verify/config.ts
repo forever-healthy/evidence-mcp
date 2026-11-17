@@ -2,7 +2,7 @@ import { num, str } from "../env.js";
 import { PROVIDER_NAMES, providerByName, providerFor, providerForKey, type Provider } from "./providers.js";
 
 // fh_verify_claim's decision model, as documented (.env.example, README):
-//   FH_VERIFY_PROVIDER  perplexity | google | openai — the API the server speaks
+//   FH_VERIFY_PROVIDER  perplexity | google | openai | liquid — the API the server speaks
 //   FH_VERIFY_URL       empty: the provider's hosted endpoint
 //   FH_VERIFY_MODEL     empty: the provider's default
 //   FH_VERIFY_API_KEY   empty for a key-less server (Decider for Mac)

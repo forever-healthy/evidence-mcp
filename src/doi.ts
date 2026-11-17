@@ -1,4 +1,4 @@
-import { contactEmail } from "./contact.js";
+import { contactEmail, openalexParams } from "./contact.js";
 import { fetchText, LIBRARY_UA } from "./http.js";
 import type { Correction, CorrectionType, PubmedRecord } from "./pubmed.js";
 
@@ -89,7 +89,7 @@ export function fromInvertedIndex(index: Record<string, number[]> | null | undef
 }
 export async function openAlexAbstract(doi: string): Promise<string> {
   try {
-    const j = JSON.parse(await fetchText(`https://api.openalex.org/works/https://doi.org/${encodeURIComponent(doi)}?mailto=${encodeURIComponent(contactEmail())}&select=abstract_inverted_index`, { "User-Agent": LIBRARY_UA })) as { abstract_inverted_index?: Record<string, number[]> };
+    const j = JSON.parse(await fetchText(`https://api.openalex.org/works/https://doi.org/${encodeURIComponent(doi)}?${openalexParams()}&select=abstract_inverted_index`, { "User-Agent": LIBRARY_UA })) as { abstract_inverted_index?: Record<string, number[]> };
     return fromInvertedIndex(j.abstract_inverted_index);
   } catch { return ""; }
 }

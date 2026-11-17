@@ -15,7 +15,7 @@ export const google: Provider = {
   keyPrefixes: ["AIza", "AQ."],   // AQ.: the newer AI Studio keys
   modelPrefix: "gemini-",
   matches: (host) => host === "generativelanguage.googleapis.com",
-  windowChars: () => 800000,
+  windowChars: () => 400000,   // as Perplexity hosted: 800,000-character windows went over a 262k-token limit there (dense papers, 1.7 characters a token)
   request: ({ base_url, api_key, model, state, questions }) => ({
     url: `${base_url}/v1beta/decisions`,
     headers: { "content-type": "application/json", ...(api_key ? { "x-goog-api-key": api_key } : {}) },

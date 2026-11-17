@@ -83,23 +83,32 @@ export function parseEsummary(json: string, ids: string[], libraryDir: string): 
     const first = String(s.sortfirstauthor ?? (Array.isArray(s.authors) && s.authors[0]?.name) ?? "").replace(/\s+[A-Z]{1,3}$/, "").trim() || null;   // "Diaconu CC" → Diaconu
     const pmc = (Array.isArray(s.articleids) ? s.articleids : []).find((a: J) => a.idtype === "pmc")?.value ?? null;
     const types = Array.isArray(s.pubtype) ? reviewTypes(s.pubtype.map(String)).join("; ") : "";
-    const paths = entryPaths(libraryDir, "pmid", id);
-    const level = entryExists(paths) ? String(readStatus(paths, emptyStatus(`pmid:${id}`, "pmid", id, libraryDir)).level) : null;
-    rows.push([id, String(s.title ?? "").replace(/\.$/, "") || null, first, year, s.source ? String(s.source) : null, types || null, pmc ? String(pmc) : null, level]);
+    rows.push([id, String(s.title ?? "").replace(/\.$/, "") || null, first, year, s.source ? String(s.source) : null, types || null, pmc ? String(pmc) : null, levelOf(id, libraryDir)]);
   }
   return rows;
 }
 
+// The paper's level in the library now, or null when it is not stored.
+function levelOf(id: string, libraryDir: string): string | null {
+  const paths = entryPaths(libraryDir, "pmid", id);
+  return entryExists(paths) ? String(readStatus(paths, emptyStatus(`pmid:${id}`, "pmid", id, libraryDir)).level) : null;
+}
+
 export type Fetch = (url: string) => Promise<string>;
 const live: Fetch = (url) => fetchText(url, { "User-Agent": "evidence-mcp", Accept: "application/json" });
-export type Outcome = { ok: true; result: Result; cached: boolean } | { ok: false; error: string };
+export type Outcome = { ok: true; result: Result; cached: boolean } | { ok: false; error: string; input?: true };   // input: the caller's mistake, logged as error; else failed
 
 export async function searchArticles(raw: { query?: string; sort?: string; years?: string; max_results?: number }, libraryDir = FH_EVIDENCE_DIR, fetchImpl: Fetch = live): Promise<Outcome> {
   const q = normalizeQuery(raw);
-  if ("error" in q) return { ok: false, error: q.error };
+  if ("error" in q) return { ok: false, error: q.error, input: true };
   const file = searchFile(libraryDir, searchKey(q));
   if (existsSync(file)) {
-    try { const r = JSON.parse(readFileSync(file, "utf8")) as Result; if (daysSince(r.searched) < searchCacheDays()) return { ok: true, result: r, cached: true }; } catch { /* half a file is no file */ }
+    try {
+      const r = JSON.parse(readFileSync(file, "utf8")) as Result;
+      // The listing is a week's, the level is today's: a paper added since the search shows its level
+      // (2026-11-15: three papers added after a search still read null in its cached answer).
+      if (daysSince(r.searched) < searchCacheDays()) return { ok: true, result: { ...r, rows: r.rows.map((row) => { const c = [...row] as Row; c[7] = levelOf(String(row[0]), libraryDir); return c; }) }, cached: true };
+    } catch { /* half a file is no file */ }
   }
   let total: number, ids: string[];
   try { ({ total, ids } = parseEsearch(await fetchImpl(esearchUrl(q)))); } catch (e) { return { ok: false, error: `pubmed: ${e instanceof Error ? e.message : String(e)}` }; }
@@ -112,7 +121,3 @@ export async function searchArticles(raw: { query?: string; sort?: string; years
   return { ok: true, result, cached: false };
 }
 
-export function logId(q: Query): string {
-  const s = q.query.replace(/\s+/g, "_");   // no whitespace: the log's ID column is one token (the TUI splits at spaces)
-  return s.length > 10 ? s.slice(0, 9) + "…" : s;
-}

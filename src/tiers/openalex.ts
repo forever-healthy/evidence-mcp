@@ -1,5 +1,5 @@
 import { fetchText, LIBRARY_UA } from "../http.js";
-import { contactEmail } from "../contact.js";
+import { openalexParams } from "../contact.js";
 import { download } from "../download.js";
 import { errMsg, looked, miss, oaVersion, type Candidate, type Paper, type RunContext, type Tier, type TierResult } from "./tier.js";
 
@@ -8,7 +8,7 @@ import { errMsg, looked, miss, oaVersion, type Candidate, type Paper, type RunCo
 export const openalex: Tier = {
   name: "openalex",
   applies: (p: Paper) => (p.pmid || p.doi ? true : "no pmid or doi"),
-  lookup: (p: Paper) => fetchText(`https://api.openalex.org/works/${encodeURIComponent(p.pmid ? `pmid:${p.pmid}` : `doi:${p.doi}`)}?mailto=${encodeURIComponent(contactEmail())}`, { "User-Agent": LIBRARY_UA }),
+  lookup: (p: Paper) => fetchText(`https://api.openalex.org/works/${encodeURIComponent(p.pmid ? `pmid:${p.pmid}` : `doi:${p.doi}`)}?${openalexParams()}`, { "User-Agent": LIBRARY_UA }),
   async run(p: Paper, ctx: RunContext): Promise<TierResult> {
     let data: OpenAlexWork;
     try { data = JSON.parse(await looked(this, p, ctx)); } catch (e) { return miss(this.name, errMsg(e)); }

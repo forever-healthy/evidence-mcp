@@ -67,19 +67,61 @@ export function paperYearOnly(md: string): string {
 }
 
 // The paper in windows of at most `max` characters, cut at headings, so a
-// long paper fits the Mac app's 32k-token request; the claim is judged
-// against each window and the highest P(true) counts. Raising the app's
-// limit instead does not pay: one 50k-token request did not answer in five
-// minutes where two 25k windows take 25 s (non-causal attention).
+// long paper fits the model's request (the Mac app's 32k tokens, d1-ultra's
+// 32k); the claim is judged against each window and the highest P(true)
+// counts. Raising the app's limit instead does not pay: one 50k-token request
+// did not answer in five minutes where two 25k windows take 25 s.
+// - A section longer than a window is split at its paragraphs, and the next
+//   piece starts with the last paragraph again, so a finding at a cut is whole
+//   in one of them (until 2026-11-16 it was cut off at `max`: pmid:18843650,
+//   328,486 characters, sent 60% of its text in 3 windows).
+// - Every window after the first starts with the paper's title and abstract
+//   (at most a quarter of the window): its core findings beside each part, for
+//   a claim that joins a methods detail to a result.
 export function windows(md: string, max: number): string[] {
+  const secs = cleanMarkdown(md).split(/\n(?=#)/);
+  const whole = secs.join("\n");
+  if (whole.length <= max) return [whole];
+  const title = secs[0]?.startsWith("# ") ? secs[0] : "";
+  const abstract = secs.find((x) => /^#+\s*(abstract|summary)\b/i.test(x)) ?? "";
+  const head = [title, abstract].filter((x, i, all) => x && all.indexOf(x) === i).join("\n").slice(0, Math.floor(max / 4));
+  const room = max - (head ? head.length + 1 : 0);
+  const pieces = secs.flatMap((x) => (x.length <= room ? [x] : splitSection(x, room)));
   const out: string[] = [];
   let cur = "";
-  for (const s of cleanMarkdown(md).split(/\n(?=#)/)) {
-    if (cur && cur.length + s.length + 1 > max) { out.push(cur); cur = ""; }
-    cur += (cur ? "\n" : "") + s.slice(0, max);
+  for (const x of pieces) {
+    if (cur && cur.length + x.length + 1 > room) { out.push(cur); cur = ""; }
+    cur += (cur ? "\n" : "") + x;
   }
   if (cur) out.push(cur);
-  return out.length ? out : [""];
+  return out.map((w, i) => (i > 0 && head ? `${head}\n${w}` : w));
+}
+
+// A section too long for one window, in pieces of at most `room` at its
+// paragraphs; each piece after the first repeats the paragraph before the cut
+// (when it is short enough to repeat). A paragraph longer than a piece is cut
+// in slices that overlap by 500 characters (a quarter of a small window).
+function splitSection(section: string, room: number): string[] {
+  const paras = section.split(/\n{2,}/).flatMap((p) => {
+    if (p.length <= room) return [p];
+    const slices: string[] = [];
+    const step = room - Math.min(500, Math.floor(room / 4));   // the overlap: 500 characters, a quarter of a small window
+    for (let i = 0; i < p.length; i += step) slices.push(p.slice(i, i + room));
+    return slices;
+  });
+  const out: string[] = [];
+  let cur: string[] = [];
+  const len = (ps: string[]) => ps.reduce((n, p) => n + p.length + 2, 0);
+  for (const p of paras) {
+    if (cur.length && len(cur) + p.length > room) {
+      out.push(cur.join("\n\n"));
+      const last = cur[cur.length - 1];
+      cur = last.length <= room / 4 && last.length + p.length + 2 <= room ? [last] : [];
+    }
+    cur.push(p);
+  }
+  if (cur.length) out.push(cur.join("\n\n"));
+  return out;
 }
 
 // A citation group: a parenthesis or bracket holding author names and a year,

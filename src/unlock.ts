@@ -17,7 +17,10 @@
 // Each unlocker has its own name in the log ("ok zyte", "failed zenrows: HTTP
 // 422 …"), in the wall memory and in retrieved_by. A refusal by the service
 // itself — "unlocker HTTP 4xx" (key, credit, plan limit, IP not allowed) or
-// "unlocker refused" — is an alert: ours to fix, not the page's.
+// "unlocker refused" (Auth Failed) — is an alert: ours to fix, not the page's.
+// Bright Data's refusal of the page (robots.txt, captcha, the target's status)
+// is a failed stage in the other stages' words ("HTTP 500", "challenge not
+// cleared (captcha)", "robots.txt restricts <url>"), no alert (src/unlock/brightdata.ts).
 //
 // 60 s per unlocker (2026-11-13): replaying the comparison, 60 s got all 17
 // documents 120 s got, 45 s two fewer.

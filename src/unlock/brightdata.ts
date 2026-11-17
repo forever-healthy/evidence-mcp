@@ -24,6 +24,21 @@ const TIMEOUT_MS = 60_000;   // every unlocker: on the comparison (#64) 60 s los
 // (found 2026-11-08). A plain HTTPS request returns the 407 and its
 // x-brd-err-msg header like any other status. The reply has the parts of a
 // fetch Response the code reads, so a test may pass a fetch-like fake.
+// Bright Data's refusals of the page, in the words the other stages use: the target's status as
+// "HTTP 500" (as Zyte and ZenRows say it), a captcha as a challenge not cleared (as the browsers),
+// a robots.txt rule as "robots.txt restricts <url>". null: a refusal of us (Auth Failed, a zone).
+export function pageReason(error: string, msg: string): string | null {
+  const t = `${error} ${msg}`;
+  const st = /response status was rejected: (\d{3})/i.exec(t);
+  if (st) return `HTTP ${st[1]}`;
+  const rb = /Requested URL \((.+?)\) is restricted in accordance with robots\.txt/.exec(t);   // in x-brd-error (live 2026-11-15), x-brd-err-msg empty
+  if (rb) return `robots.txt restricts ${rb[1]}`;
+  if (/robots\.txt/i.test(t)) return "robots.txt restricts the page";
+  if (/captcha|protection page/i.test(t)) return "challenge not cleared (captcha)";
+  if (/Residential Failed/i.test(t)) return "no residential exit";
+  return null;
+}
+
 export type Reply = { ok: boolean; status: number; headers: { get(name: string): string | null }; arrayBuffer(): Promise<ArrayBuffer> };
 export type PostInit = { method: "POST"; headers: Record<string, string>; body: string; signal: AbortSignal };
 export function post(url: string, init: PostInit): Promise<Reply> {
@@ -65,7 +80,13 @@ export async function get(url: string, postImpl: (url: string, init: PostInit) =
   // (code: ip_blacklisted)" (found 2026-11-13; it read as "empty response").
   const why = res.headers.get("x-brd-err-msg") ?? res.headers.get("x-brd-error");
   if (!res.ok) throw new Error(`unlocker HTTP ${res.status}${why ? `: ${why}` : ""}`);
-  if (res.headers.get("x-brd-error")) throw new Error(`unlocker refused: ${why}`);
+  // Most refusals are of the page, not of us (live, 2026-11-13–15: 80 of 80): robots.txt (Wiley's
+  // full-text links redirect to its action/oidcStart sign-in, ScienceDirect, JBS), a captcha it
+  // could not clear, the target's own 403/500/503, no residential exit — a failed stage in the
+  // other stages' words (pageReason), no alert; robots.txt and the captcha are walls
+  // (src/walls.ts). Any other refusal (Auth Failed, a zone) is "unlocker refused": an alert, ours to fix.
+  const err = res.headers.get("x-brd-error");
+  if (err) throw new Error(pageReason(err, res.headers.get("x-brd-err-msg") ?? "") ?? `unlocker refused: ${why}`);
   return { bytes: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get("content-type") ?? "" };
 }
 

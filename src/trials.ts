@@ -116,7 +116,7 @@ export function parseRows(json: string): { total: number; rows: TrialRow[] } {
   return { total: typeof d.totalCount === "number" ? d.totalCount : rows.length, rows };
 }
 
-export type TrialsOutcome = { ok: true; result: TrialsResult; cached: boolean } | { ok: false; error: string };
+export type TrialsOutcome = { ok: true; result: TrialsResult; cached: boolean } | { ok: false; error: string; input?: true };   // input: the caller's mistake, logged as error; else failed
 export type Fetch = (url: string) => Promise<string>;
 const liveFetch: Fetch = (url) => fetchText(url, { "User-Agent": LIBRARY_UA, Accept: "application/json" });
 
@@ -124,7 +124,7 @@ const liveFetch: Fetch = (url) => fetchText(url, { "User-Agent": LIBRARY_UA, Acc
 // FH_SEARCH_CACHE_DAYS, else the API, stored, answered.
 export async function searchTrials(raw: TrialsQuery, libraryDir = FH_EVIDENCE_DIR, fetchImpl: Fetch = liveFetch): Promise<TrialsOutcome> {
   const q = normalizeQuery(raw);
-  if ("error" in q) return { ok: false, error: q.error };
+  if ("error" in q) return { ok: false, error: q.error, input: true };
   const file = searchFile(libraryDir, searchKey(q));
   if (existsSync(file)) {
     try {
@@ -141,12 +141,8 @@ export async function searchTrials(raw: TrialsQuery, libraryDir = FH_EVIDENCE_DI
   return { ok: true, result, cached: false };
 }
 
-// The log's ID column for a search: "ct:" and the first query part, cut to a
-// PubMed ID's width (13) together; the tool column says "search".
-export function trialsLogId(q: TrialsResult["query"]): string {
-  const s = (q.intervention ?? q.condition ?? q.query ?? "").replace(/\s+/g, "_");   // one token, as the TUI's columns need
-  return s.length > 10 ? s.slice(0, 9) + "…" : s || "-";
-}
+// The log's ID column for a search says which registry: "nct" (ClinicalTrials.gov), "pubmed" —
+// the query itself ends the line, after " | " (2026-11-16: the first nine characters said nothing).
 
 // ---- Design notes: Trial search — `fh_clinicaltrials_search_studies` ----
 //
