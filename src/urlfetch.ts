@@ -15,6 +15,7 @@ import { errMsg } from "./tiers/tier.js";
 import { accountProblem, unlock, unlockers } from "./unlock.js";
 import { firstOk, openRequest, type Req, type Task } from "./race.js";
 import { downNote, hostState } from "./hosts.js";
+import { stripScripts, stripTags } from "./text.js";
 
 // fh_fetch_url(url, …): the standard MCP "fetch" tool, served from the
 // library. The answer is what the reference fetch server
@@ -70,7 +71,7 @@ export type UrlMeta = {
   format: UrlFormat;
   content_type: string;
   level: "full_text" | "title";   // title: nothing to read (a failed fetch) — fh_info counts it as such
-  retrieved_by: string;           // fetch | fetch-proxy <label> | playwright <label> | chrome <label> | zenrows | zyte | brightdata (browser <label> before 0.2.24)
+  retrieved_by: string;           // fetch | fetch-proxy <label> | playwright <label> | chrome <label> | firecrawl | zenrows | zyte | brightdata (browser <label> before 0.2.24)
   fetched: string;                // when, UTC to the second (YYYY-MM-DDTHH:MM:SSZ; older entries a bare date)
   error: string | null;           // the failure, for format failed
   files: string[];
@@ -122,7 +123,7 @@ function writeUrlMeta(p: UrlPaths, m: UrlMeta): void {
 const SHELL_WORDS = 100, EMPTY_WORDS = 10;
 const SHELL_PHRASE = /\bloading\b|javascript|enable it|connecting to|please wait|redirecting/i;
 export function isScriptShell(markdownOrHtml: string): { shell: boolean; words: number } {
-  const text = markdownOrHtml.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<noscript[\s\S]*?<\/noscript>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ").replace(/\]\([^)]*\)/g, ")");
+  const text = stripTags(stripScripts(markdownOrHtml), " ").replace(/&[a-z#0-9]+;/gi, " ").replace(/\]\([^)]*\)/g, ")");
   const words = text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
   return { shell: words < EMPTY_WORDS || (words < SHELL_WORDS && SHELL_PHRASE.test(text)), words };
 }

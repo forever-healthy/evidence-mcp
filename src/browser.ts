@@ -32,7 +32,8 @@
 // No browser is bundled with the package, none is downloaded and none is
 // launched here: every stage is a browser somebody runs. A Playwright stage keeps
 // its cookies in <library>/.browser/<label>.json between runs.
-import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+import { hostState } from "./hosts.js";
 import { PLAIN_HTTP, toHttps } from "./http.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -90,7 +91,10 @@ export async function cdpUrl(endpoint: string): Promise<string> {
   const u = new URL(cdpHttp(endpoint));
   const host = u.hostname.replace(/^\[|\]$/g, "");
   if (host === "localhost" || /^[\d.]+$/.test(host) || host.includes(":")) return u.toString().replace(/\/$/, "");
-  try { const { address, family } = await lookup(host); u.hostname = family === 6 ? `[${address}]` : address; } catch { /* unresolvable: Chrome or the connect says so */ }
+  // The address the health check found accepting (src/hosts.ts): not simply the first a lookup
+  // gives, which can be a link-local IPv6 without its zone.
+  const h = await hostState(host, Number(u.port) || 9222);
+  if (h.address) u.hostname = isIP(h.address) === 6 ? `[${h.address}]` : h.address;
   return u.toString().replace(/\/$/, "");
 }
 export type StageKind = "playwright" | "chrome";

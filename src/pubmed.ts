@@ -1,6 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
 import { contactEmail } from "./contact.js";
 import { fetchText } from "./http.js";
+import { stripTags } from "./text.js";
 
 // The `pubmed` tier: one efetch call for the PubMed record of a PMID, and the
 // parser that pulls what the entry needs out of its XML. The XML itself is
@@ -92,7 +93,7 @@ function text(n: Node): string {
 const plain = (n: Node) => decodeEntities(text(n)).trim();
 
 function inlineText(raw: string): string {
-  return decodeEntities(raw.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+  return decodeEntities(stripTags(raw)).replace(/\s+/g, " ").trim();
 }
 
 function decodeEntities(s: string): string {

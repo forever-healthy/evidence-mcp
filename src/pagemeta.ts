@@ -64,7 +64,7 @@ function metaTags(html: string): Map<string, string[]> {
     const tag = m[0];
     const key = (/\b(?:name|property|itemprop)\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? "").toLowerCase();
     const val = /\bcontent\s*=\s*"([^"]*)"/i.exec(tag)?.[1] ?? /\bcontent\s*=\s*'([^']*)'/i.exec(tag)?.[1];
-    if (key && val && val.trim()) out.set(key, [...(out.get(key) ?? []), val.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim()]);
+    if (key && val && val.trim()) out.set(key, [...(out.get(key) ?? []), val.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").trim()]);
   }
   return out;
 }

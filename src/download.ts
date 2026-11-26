@@ -10,6 +10,7 @@ import { accountProblem, unlock, UNLOCKER_PREFIX, unlockers } from "./unlock.js"
 import { firstOk, openRequest, type Req, type Task } from "./race.js";
 import { recordStage, walled, wallNote } from "./walls.js";
 import { errMsg, miss, type Candidate, type Paper, type RunContext, type TierHit, type TierResult } from "./tiers/tier.js";
+import { stripScripts, stripTags } from "./text.js";
 
 // The download helper: a tier that has located copies of the paper calls it
 // to fetch them, PDFs first, and convert whatever comes back (PDF, JATS XML,
@@ -21,7 +22,7 @@ import { errMsg, miss, type Candidate, type Paper, type RunContext, type TierHit
 //             browser server in order (next to the server, then a residential
 //             one), when the fetch met a 403, a bot wall, or a landing
 //             page without the article (script-rendered)
-//   unlockers   every web unlocker with a key (ZenRows, Zyte, Bright Data), when
+//   unlockers   every web unlocker with a key (Firecrawl, ZenRows, Zyte, Bright Data), when
 //               all of that was refused (src/unlock.ts)
 // Three stages — 1 fetch (plain fetch, fetch proxy), 2 browsers, 3 unlockers —
 // each only when the one before got no valid result. Within a stage all requests
@@ -205,7 +206,7 @@ export function serviceMessage(bytes: Buffer, contentType = ""): string {
   const text = bytes.toString("utf8").trim();
   if (!text) return `empty response (${contentType.split(";")[0] || "no type"})`;
   try { const j = JSON.parse(text); const m = j?.message ?? j?.error?.message ?? j?.error ?? j?.detail; if (typeof m === "string" && m.trim()) return m.trim().replace(/\s+/g, " ").slice(0, 160); } catch { /* not JSON */ }
-  const visible = text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ").replace(/<title>([\s\S]*?)<\/title>/i, "$1. ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+  const visible = stripScripts(text).replace(/<title>([\s\S]*?)<\/title>/i, "$1. ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
   return (visible || text).slice(0, 160);
 }
 
@@ -259,7 +260,7 @@ export async function convertBytes(p: Paper, bytes: Buffer, contentType = ""): P
   // always pass and any document would count as this paper.
   const content = format === "xml" ? md : md.replace(/^# [^\n]*\n/, "");   // JATS carries the paper's own title
   // HTML: the title may sit in a <header> or <title> the converter drops — look in the raw page text too.
-  const rawText = format === "html" ? bytes.toString("utf8").replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ") : undefined;
+  const rawText = format === "html" ? stripTags(stripScripts(bytes.toString("utf8")), " ") : undefined;
   const check = checkFulltext(content, p.title, rawText, p.doi, format === "xml", format === "pdf");
   if (!check.ok) return { ok: false, reason: describe(check.reason, format, content), format };
   return { ok: true, format, md };
@@ -296,11 +297,14 @@ export function elsevierToJats(xml: string): string {
 // | fetch-proxy | the `FH_FETCH_PROXY` host (`http://host:8888` internally): the same fetch through an HTTP forward proxy (`utilities/fetch-proxy/`, tinyproxy; undici's `ProxyAgent`), so it leaves from that host's IP | on every failed fetch, with its headers (tokens too; the proxy only tunnels TLS), not for a configured service; the later stages still go by what the plain fetch met; Cloudflare and Turnstile still refuse it (TLS fingerprint), the browsers' job |
 // | playwright × N | `src/browser.ts`, `chromium.connect()` to each `FH_PLAYWRIGHT_n` host (`ws://host:8932` internally; `utilities/playwright/` = the container: Microsoft's Playwright image, `playwright-core run-server` under Xvfb, port 8932) | headed via the server's Xvfb (clears Cloudflare "Just a moment" for Wiley, Karger…); stage 1 next to the server (data-centre IP), stage 2 on home-box (residential line; both deployed by `utilities/deploy.sh` as `evidence-playwright-server-9300`, published on the tailnet IP). The server must run the package's exact `playwright-core` (428 otherwise, said in words as an alert) |
 // | chrome × N | each `FH_CHROME_n` host (`cdp://host:9222` internally): a real Google Chrome with `--remote-debugging-port`, attached with `connectOverCDP`, its default profile; `utilities/chrome/chrome.sh` starts it, `utilities/chrome/chrome.md` explains it; on this VM `127.0.0.1`, the `fh-chrome` user service | Google Chrome brand, real GPU, cookies that persist — the strongest stage, after the Playwright servers so the desktop takes only the residue |
-// | zenrows | ZenRows Fetch, `mode=auto` | best in the unlocker comparison (#64: 11/16 open copies, 7/33 hard); subscription |
-// | zyte | Zyte API `/v1/extract`, httpResponseBody | 10/16, 6/33; pay-per-use |
-// | brightdata | Bright Data Web Unlocker, `/request` | 8/16, 2/33; refuses ScienceDirect/Cell without KYC; zone IP lists (a denylist answers 200 + x-brd-error) |
+// | firecrawl | Firecrawl Cloud `/v2/scrape`, rawHtml, parsers [] (a PDF as its bytes), proxy auto | |
+// | zenrows | ZenRows Fetch, `mode=auto` | |
+// | zyte | Zyte API `/v1/extract`, httpResponseBody | |
+// | brightdata | Bright Data Web Unlocker, `/request` | zone IP lists (a denylist answers 200 + x-brd-error) |
 //
-// Found in testing (2026-10-27): headless Chromium does not clear Cloudflare challenges even from a residential IP; headed Chromium does for Wiley-type walls; Playwright's bundled Chromium failed to extract on this aarch64 dev box (two files instead of ~100), one reason the package never downloads or launches a browser itself (the in-process "local" stage was dropped 2026-11-08: every stage is a browser somebody runs); OUP and ScienceDirect (Turnstile) block automated browsers outright — the unlocker got OUP, nothing gets ScienceDirect. No anti-detection flags are used, by decision.
+// The package never downloads or launches a browser itself (the in-process "local" stage was dropped 2026-11-08: every stage is a browser somebody runs). No anti-detection flags are used, by decision.
+//
+// The evaluations of the services and stages (results, decisions, live observations): stuff/unlock/unlockers.md.
 //
 // A review pipeline's residential egress (Playwright MCP on :8931, tinyproxy on :3128) is not used as such: the MCP returns snapshots, not bytes. Its idea is: the fetch-proxy stage (2026-11-10) is the same tinyproxy, lending the residential IP to the plain fetch — a fetch's speed for what is walled by IP alone, before any browser.
 //

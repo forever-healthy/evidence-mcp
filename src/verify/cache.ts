@@ -28,8 +28,8 @@ import { readPaper, verifyClaim, type Paper, type VerifyResult } from "./verify.
 // model or threshold is a different judgement. The file names the source and
 // the claim, for a human reading it.
 //
-// Kept: results with a model score (pass, fail, unverifiable). Never kept: an
-// error, or the title-only fail that needs no model. Expiry: the same
+// Kept: results with a model score (supported, not_supported, unverifiable). Never
+// kept: an error, or the title-only not_supported that needs no model. Expiry: the same
 // FH_REFRESH_AFTER_DAYS as pages. The result JSON the model receives
 // is identical either way; the cache shows in the log line ("cached").
 //
@@ -53,7 +53,9 @@ export function foldClaim(claim: string): string {
     .replace(/\s+/g, " ").trim().replace(/[.;:,]+$/, "").trim();
 }
 export const textHash = (text: string) => sha(text).slice(0, 16);
-export const cacheKey = (claim: string, id: string, model: string, threshold: number, text: string) => sha(`${foldClaim(claim)}\n${id}\n${model}\n${threshold}\n${text}`).slice(0, 16);
+// v2: verdicts supported / not_supported (2026-11-19); judgements stored under the old key are never read again.
+// v3: a not_supported next to a lost PDF symbol is decided again (2026-11-23, #95).
+export const cacheKey = (claim: string, id: string, model: string, threshold: number, text: string) => sha(`v3\n${foldClaim(claim)}\n${id}\n${model}\n${threshold}\n${text}`).slice(0, 16);
 
 export const verdictFile = (libraryDir: string, key: string) => join(libraryDir, "verify", key.slice(0, 2), key.slice(0, 4), `${key}.json`);
 

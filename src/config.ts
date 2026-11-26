@@ -7,8 +7,8 @@ import { urlTier } from "./tiers/url.js";
 // environment (src/env.ts: .env loaded first; environment, then .env, then the
 // default). No configuration file.
 //
-//   FH_TIERS=pmc,unpaywall,proxy   the whole sequence: exactly these, in
-//       this order; a tier not listed is off. Unset: the built-in order, every
+//   FH_SOURCES=pmc,unpaywall,proxy   the full-text sources: exactly these, in
+//       this order; a source not listed is off. Unset: the built-in order, every
 //       tier on (and proxy last, when its URL is set).
 //   FH_PROXY_URL=https://…/{doi}   the one proxy tier, named "proxy":
 //       a URL template with {doi} {pmid} {pmcid}; unset = no proxy tier.
@@ -30,7 +30,7 @@ import { urlTier } from "./tiers/url.js";
 // Every variable the server reads, for fh_info's provenance (which source
 // each came from, never the value).
 export const VARIABLES = [
-  "FH_EVIDENCE_DIR", "FH_LOG_KEEP_DAYS", "FH_ENV", "FH_TIERS", "FH_CONTACT_EMAIL",
+  "FH_EVIDENCE_DIR", "FH_LOG_KEEP_DAYS", "FH_CLIENT_NAME", "FH_CLIENT_SHOW", "FH_ENV", "FH_SOURCES", "FH_CONTACT_EMAIL",
   "FH_ELSEVIER_API_KEY", "FH_WILEY_TDM_TOKEN", "FH_CORE_API_KEY",
   "FH_PROXY_URL", "FH_PROXY_HEADERS",
   "FH_FETCH_PROXY", "FH_PLAYWRIGHT_1", "FH_PLAYWRIGHT_2", "FH_CHROME_1", "FH_PLAYWRIGHT_HEADLESS",
@@ -41,11 +41,11 @@ export const VARIABLES = [
   "FH_VERIFY_LIQUID_MODEL", "FH_VERIFY_LIQUID_URL", "FH_VERIFY_LIQUID_API_KEY",
   "FH_VERIFY_MODEL", "FH_VERIFY_URL", "FH_VERIFY_API_KEY", "FH_VERIFY_THRESHOLD", "FH_VERIFY_TIMEOUT_SECS",
   "FH_RETRY_AFTER_DAYS", "FH_RETRY_BLOCKED", "FH_REFRESH_AFTER_DAYS", "FH_SEARCH_CACHE_DAYS",
-  "FH_NCBI_API_KEY", "FH_WEB_SEARCH_ENABLED", "FH_WEB_SEARCH_EXA_API_KEY", "FH_WEB_SEARCH_SERPER_API_KEY", "FH_WEB_SEARCH_BRAVE_API_KEY", "FH_WEB_SEARCH_SNIPPETS", "FH_WEB_SEARCH_TIMEOUT_SECS", "FH_CITATIONS_ENABLED", "FH_OPENALEX_API_KEY", "FH_ZENROWS_API_KEY", "FH_ZYTE_API_KEY", "FH_BRIGHTDATA_API_KEY", "FH_BRIGHTDATA_ZONE",
+  "FH_NCBI_API_KEY", "FH_WEB_SEARCH_EXA_API_KEY", "FH_WEB_SEARCH_SERPER_API_KEY", "FH_WEB_SEARCH_BRAVE_API_KEY", "FH_WEB_SEARCH_SNIPPETS", "FH_WEB_SEARCH_TIMEOUT_SECS", "FH_OPENALEX_API_KEY", "FH_ZENROWS_API_KEY", "FH_FIRECRAWL_API_KEY", "FH_ZYTE_API_KEY", "FH_BRIGHTDATA_API_KEY", "FH_BRIGHTDATA_ZONE", "FH_EVID_ENABLED", "FH_EVID_MAX_MB", "FH_EVMAP_ENABLED", "FH_EVMAP_MAX_RESULTS_PER_QUERY", "FH_EVMAP_CITATION_REVIEWS", "FH_EVMAP_CITATION_MAX_ADDED", "FH_EVMAP_RANKING_PROVIDER", "FH_EVMAP_RANKING_API_KEY", "FH_EVMAP_RANKING_MODEL", "FH_EVMAP_RANKING_URL", "FH_EVMAP_RANKING_ITEM_CANDIDATES", "FH_EVMAP_RANKING_ITEM_PICKS", "FH_EVMAP_RANKING_ASSIGN_ARTICLES", "FH_EVMAP_ASPECT_ARTICLES", "FH_EVMAP_SCREENING_PROVIDER", "FH_EVMAP_ANTHROPIC_API_KEY", "FH_EVMAP_ANTHROPIC_MODEL", "FH_EVMAP_ANTHROPIC_URL", "FH_EVMAP_GOOGLE_API_KEY", "FH_EVMAP_GOOGLE_MODEL", "FH_EVMAP_GOOGLE_URL", "FH_EVMAP_OPENAI_API_KEY", "FH_EVMAP_OPENAI_MODEL", "FH_EVMAP_OPENAI_URL", "FH_EVMAP_OPENROUTER_API_KEY", "FH_EVMAP_OPENROUTER_MODEL", "FH_EVMAP_OPENROUTER_URL", "FH_EVMAP_SCREENING_URL", "FH_EVMAP_SCREENING_API_KEY", "FH_EVMAP_SCREENING_MODEL", "FH_EVMAP_SCREENING_PARALLEL", "FH_EVMAP_PROMPTS", "FH_EVMAP_WAIT_SECS", "FH_EVMAP_DISCOVERY_PROVIDER", "FH_EVMAP_DISCOVERY_API_KEY", "FH_EVMAP_DISCOVERY_MODEL", "FH_EVMAP_DISCOVERY_URL", "FH_EVMAP_DISCOVERY_ITERATIONS", "FH_EVMAP_DISCOVERY_ITEM_RESULTS", "FH_EVMAP_DISCOVERY_SURVEY_RESULTS", "FH_EVMAP_DISCOVERY_TITLES", "FH_EVMAP_XAI_API_KEY", "FH_EVMAP_XAI_MODEL", "FH_EVMAP_XAI_URL",
 ] as const;
-// Development-only features (web search, citations) are not named at all while their switch is off.
+// Development-only features (EVID, the evidence map) are not named at all while their switch is off.
 const on = (v: string | undefined) => /^(true|1|yes|on)$/i.test(v?.trim() ?? "");
-const hidden = (v: string, env: NodeJS.ProcessEnv) => (v.startsWith("FH_WEB_SEARCH_") && !on(env.FH_WEB_SEARCH_ENABLED)) || (v === "FH_CITATIONS_ENABLED" && !on(env.FH_CITATIONS_ENABLED));
+const hidden = (v: string, env: NodeJS.ProcessEnv) => (v.startsWith("FH_EVID_") && !on(env.FH_EVID_ENABLED)) || (v.startsWith("FH_EVMAP_") && !on(env.FH_EVMAP_ENABLED));
 export const sources = (env: NodeJS.ProcessEnv = process.env): Record<string, Source> => Object.fromEntries(VARIABLES.filter((v) => !hidden(v, env)).map((v) => [v, sourceOf(v, env)]));
 
 export type Settings = { retry_after_days: number; retry_blocked: boolean; refresh_after_days: number; search_cache_days: number };
@@ -73,7 +73,7 @@ export function proxyHeaders(spec: string): Record<string, string> {
 export type ResolvedTiers = {
   tiers: Tier[];                                   // enabled, in run order
   all: { name: string; enabled: boolean }[];       // the run order, then what is off
-  source: Source;                                  // where FH_TIERS came from
+  source: Source;                                  // where FH_SOURCES came from
   problems: string[];
 };
 
@@ -85,7 +85,8 @@ export function resolveTiers(env: NodeJS.ProcessEnv = process.env): ResolvedTier
   const proxyUrl = str("FH_PROXY_URL", env);
   if (proxyUrl) available.set("proxy", urlTier("proxy", proxyUrl, proxyHeaders(str("FH_PROXY_HEADERS", env))));
 
-  const listed = str("FH_TIERS", env);
+  const key = "FH_SOURCES";
+  const listed = str(key, env);
   const order = listed ? listed.split(",").map((s) => s.trim()).filter(Boolean) : [...available.keys()];
   const tiers: Tier[] = [], seen = new Set<string>();
   for (const name of order) {
@@ -93,9 +94,9 @@ export function resolveTiers(env: NodeJS.ProcessEnv = process.env): ResolvedTier
     seen.add(name);
     const t = available.get(name);
     if (t) tiers.push(t);
-    else if (name === "proxy") problems.push('FH_TIERS: "proxy" listed, but FH_PROXY_URL is unset');
-    else problems.push(`FH_TIERS: unknown tier "${name}" (built-in: ${BUILTIN.map((t) => t.name).join(", ")}; proxy when FH_PROXY_URL is set)`);
+    else if (name === "proxy") problems.push(`${key}: "proxy" listed, but FH_PROXY_URL is unset`);
+    else problems.push(`${key}: unknown source "${name}" (built-in: ${BUILTIN.map((t) => t.name).join(", ")}; proxy when FH_PROXY_URL is set)`);
   }
   const all = [...tiers.map((t) => ({ name: t.name, enabled: true })), ...[...available.keys()].filter((n) => !seen.has(n)).map((name) => ({ name, enabled: false }))];
-  return { tiers, all, source: sourceOf("FH_TIERS", env), problems };
+  return { tiers, all, source: sourceOf(key, env), problems };
 }

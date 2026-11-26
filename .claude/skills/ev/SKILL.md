@@ -120,7 +120,7 @@ Works on any text document. [file] as in General Rules; [claims_file] is [file] 
   - [line] is the line number of the sentence in [file].
 
 * For each row call `fh_verify_claim` with the claim and the source ID, one call per row, in document order. Fill the row from the answer only:
-  - `verdict` `pass` → 🟢; `fail` → 🔴; `unverifiable` → 🟡
+  - `verdict` `supported` → 🟢; `not_supported` → 🔴; `unverifiable` → 🟡
   - `error` (the claim was refused: too short, a fragment, carrying a citation): correct the claim as the error says and call once more with the corrected claim, which goes in the row. Still an `error`, or an error that is not about the claim (source not found, no decision model): 🟡 with the error in `Comment`
   - `Comment`: `abstract only` when `basis` is `abstract` and the verdict is 🟢; the `reason` when not null; `superseded by a correction` when `superseded` is true; `glyphs: <n>` when `glyphs_unresolved` is above 0 and the verdict is 🔴. Otherwise empty
 

@@ -9,10 +9,10 @@
 // answer wins (src/race.ts) — a request already sent may be billed even when its
 // answer is not used; without a key an unlocker does not take part. One file per
 // service under src/unlock/; a new one is a file and one
-// entry in SERVICES (listed best first, as measured on 49 walled URLs on
-// 2026-11-13, #64: ZenRows, Zyte, Bright Data).
+// entry in SERVICES (listed best first, as measured on 49 walled URLs:
+// stuff/unlock/unlockers.md — Firecrawl, ZenRows, Zyte, Bright Data).
 //
-//   FH_ZENROWS_API_KEY, FH_ZYTE_API_KEY, FH_BRIGHTDATA_API_KEY (+ FH_BRIGHTDATA_ZONE)
+//   FH_FIRECRAWL_API_KEY, FH_ZENROWS_API_KEY, FH_ZYTE_API_KEY, FH_BRIGHTDATA_API_KEY (+ FH_BRIGHTDATA_ZONE)
 //
 // Each unlocker has its own name in the log ("ok zyte", "failed zenrows: HTTP
 // 422 …"), in the wall memory and in retrieved_by. A refusal by the service
@@ -25,13 +25,14 @@
 // 60 s per unlocker (2026-11-13): replaying the comparison, 60 s got all 17
 // documents 120 s got, 45 s two fewer.
 import { brightdata } from "./unlock/brightdata.js";
+import { firecrawl } from "./unlock/firecrawl.js";
 import { zenrows } from "./unlock/zenrows.js";
 import { zyte } from "./unlock/zyte.js";
 
 export type Unlocked = { bytes: Buffer; contentType: string };
 export type UnlockerService = { name: string; keyVar: string; get: (url: string, signal?: AbortSignal) => Promise<Unlocked> };
 
-const SERVICES: UnlockerService[] = [zenrows, zyte, brightdata];
+const SERVICES: UnlockerService[] = [firecrawl, zenrows, zyte, brightdata];
 export const UNLOCKER_NAMES = SERVICES.map((s) => s.name);
 // A reason or log message that starts with an unlocker's name: "zyte: HTTP 520 …".
 export const UNLOCKER_PREFIX = new RegExp(`^(${UNLOCKER_NAMES.join("|")}): `);

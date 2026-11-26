@@ -4,12 +4,13 @@ import { dirname } from "node:path";
 import { daysSince, today, writeAtomic } from "./entry.js";
 import { FH_EVIDENCE_DIR } from "./layout.js";
 import { searchCacheDays, searchFile } from "./trials.js";
+import { stripTags } from "./text.js";
 
 // fh_web_search: a web search, optionally restricted to sites — where a
 // site's own search page fails (script-rendered: an empty page shell, "search
 // could not finish") and a model's built-in search drops a domain filter
 // (Opus 5.5: 440 of 720 results off-site). Exa, chosen on
-// stuff/bench/search-engines.md (#73): most relevant on-site hits of seven
+// stuff/search/search-engines.md (#73): most relevant on-site hits of seven
 // providers (437 of 72 searches, 6 empty), the smallest answers (~700 tokens).
 // Offered only when a provider is configured (FH_WEB_SEARCH_*); without one the
 // server registers no tool and agents use their model's own search. Internal
@@ -52,16 +53,13 @@ export type Merged = { total: number; columns: typeof COLUMNS; rows: Row[]; prov
 
 // The providers: every one with a key takes part, as the unlockers do
 // (src/unlock.ts) — FH_WEB_SEARCH_EXA_API_KEY, _SERPER_API_KEY, _BRAVE_API_KEY.
-// Development only: nothing unless FH_WEB_SEARCH_ENABLED is true (default false).
 // No key: no web search, the tool is not offered. They are asked at once and
-// their answers merged: on the bench (stuff/bench/search-engines.md, #73) Exa
+// their answers merged: on the bench (stuff/search/search-engines.md, #73) Exa
 // alone found 437 distinct relevant pages, the three together 744.
 export const SEARCH_PROVIDERS = ["exa", "serper", "brave"] as const;
 export type SearchProviderName = (typeof SEARCH_PROVIDERS)[number];
 export type WebSearchConfig = { provider: SearchProviderName; key: string };
-export const webSearchEnabled = (env: NodeJS.ProcessEnv = process.env): boolean => /^(true|1|yes|on)$/i.test(env.FH_WEB_SEARCH_ENABLED?.trim() ?? "");
 export function webSearchConfig(env: NodeJS.ProcessEnv = process.env): WebSearchConfig[] {
-  if (!webSearchEnabled(env)) return [];
   return SEARCH_PROVIDERS.flatMap((provider) => { const key = env[`FH_WEB_SEARCH_${provider.toUpperCase()}_API_KEY`]?.trim(); return key ? [{ provider, key }] : []; });
 }
 export const webSearchConfigured = (env: NodeJS.ProcessEnv = process.env): boolean => webSearchConfig(env).length > 0;
@@ -111,7 +109,7 @@ export function isoDay(d: unknown): string | null {
 }
 // Google's tracking parameter on Serper's links
 const stripTracking = (u: string) => u.replace(/([?&])srsltid=[^&]*&?/, "$1").replace(/[?&]$/, "");
-const plain = (t: string | null | undefined) => (t ?? "").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+const plain = (t: string | null | undefined) => stripTags(t ?? "").replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 // site: terms for the providers that take them in the query text (Serper, Brave)
 const withSites = (q: Query) => !q.sites ? q.query : q.sites.length === 1 ? `${q.query} site:${q.sites[0]}` : `${q.query} (${q.sites.map((d) => `site:${d}`).join(" OR ")})`;
 
@@ -162,7 +160,7 @@ const live: Post = async (url, body, headers) => {
 };
 
 // One request to the provider, its answer as rows. Exa restricts by includeDomains,
-// Serper and Brave by site: in the query (both keep it: stuff/bench/search-engines.md).
+// Serper and Brave by site: in the query (both keep it: stuff/search/search-engines.md).
 const SEARCH: Record<SearchProviderName, (q: Query, key: string, post: Post) => Promise<Row[]>> = {
   exa: async (q, key, post) => parseExa(await post("https://api.exa.ai/search", {
     query: q.query, ...(q.sites ? { includeDomains: q.sites } : {}),

@@ -1,8 +1,9 @@
-![Version](https://img.shields.io/badge/Version-1.0.17-green.svg)
+![Version](https://img.shields.io/badge/Version-1.1.0-green.svg)
 ![License MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 [![Forever Healthy](https://img.shields.io/badge/(c)_2026-Forever_Healthy-573D7D.svg)](https://forever-healthy.org)
 [![npm](https://img.shields.io/badge/npm-evidence--mcp-cb3837.svg)](https://www.npmjs.com/package/evidence-mcp)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.forever--healthy%2Fevidence--mcp-1f6feb.svg)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.forever-healthy/evidence-mcp)
+[![Glama score](https://glama.ai/mcp/servers/forever-healthy/evidence-mcp/badges/score.svg)](https://glama.ai/mcp/servers/forever-healthy/evidence-mcp)
 
 ![Forever Healthy Evidence MCP](docs/evidence-git-header.png)
 
@@ -14,8 +15,9 @@ Toolset:
 
 - A self-building local library of sources: PMID, DOI, DailyMed, NCT
 - Decider-based claim verification against those sources
+- Complete cited-by lists for any article
 - Optimized access to PubMed, ClinicalTrials.gov & DailyMed
-- Optimized web fetch. 
+- Optimized web fetch and web search
 
 All functions are token-optimized to minimize context use, return agent-ready content, and cache locally for fast responses. The MCP is self-explanatory to agents, so they can start using it right away with no coding required.
 
@@ -41,6 +43,13 @@ Released under the MIT license to empower, simplify, and speed up medical litera
 - Local caching for repeat queries: a cached verdict in under 1 ms vs. ~1 s from the model
 - Support for Perplexity, Google, OpenAI, and Liquid AI decision models
 
+### Complete Cited-By Lists
+
+- The articles that cite a paper: a trial's follow-ups, the later meta-analyses that include it, guidelines, and the comments on it
+- From OpenAlex; PubMed's own "cited by" covers only citations from PubMed Central
+- Filtered by publication type and year, sorted by newest or most cited
+- Local caching
+
 ### Optimized PubMed Access
 
 - Up to 97% fewer tokens than other PubMed MCPs (Anthropic's, cyanheads'): a 20-row search ~50–97% smaller, 20 records ~96% smaller
@@ -64,6 +73,13 @@ Released under the MIT license to empower, simplify, and speed up medical litera
 - Local caching
 - Automatic use of the download cascade
 
+### Optimized Web Search
+
+- Replaces the model's built-in web search: links with a short passage from each page
+- Up to 95% fewer tokens: ~1,000 tokens per search vs. 12,000–19,000 for the built-in search of Claude Opus
+- Several search providers asked at once and merged (Exa, Serper, Brave): more results than any one alone, especially within one site
+- Local caching
+
 ### Versatile Download Cascade
 
 - Multi-stage download cascade for web pages and full texts
@@ -71,7 +87,7 @@ Released under the MIT license to empower, simplify, and speed up medical litera
 - Escalates stage by stage, with parallel requests in each: fetch, browsers, unlockers
 - Fetch: plain fetch and a fetch proxy
 - Browsers: Playwright browser servers and a real Chrome
-- Unlockers: ZenRows, Zyte, Bright Data
+- Unlockers: Firecrawl, ZenRows, Zyte, Bright Data
 - Remembers failing targets and services and skips them for a while
 - Agent-deployable: comes with instructions for agents to set up and test every stage
 
@@ -92,17 +108,19 @@ Released under the MIT license to empower, simplify, and speed up medical litera
 | Tool | |
 |---|---|
 | `fh_info()` | version, library counts by type and level, sources, browsers, decider, configuration, cache hits |
-| `fh_library_add(id)` | download and store one record — `pmid:`, `doi:` (paper), `dailymed:` (FDA drug label), `nct:` (trial record); a paper with its full text wherever it can be obtained |
+| `fh_library_add(id)` | download and store one record — `pmid:`, `doi:` (article), `dailymed:` (FDA drug label), `nct:` (trial record); an article with its full text wherever it can be obtained |
 | `fh_library_status(id)` | the status of one record (level, citable, corrections) |
 | `fh_library_read(id, section?, query?, max_chars?, max_hits?)` | the outline, one section or the passages matching a query; adds a missing record first |
 | `fh_verify_claim(claim, id)` | does this source state this claim? A verdict from the decider, on full text or abstract; adds a missing record first |
 | `fh_pubmed_search_articles(query, max_results?, sort?, years?)` | search PubMed in its own syntax: PMID, title, first author, year, journal, publication types, PMCID, library level |
 | `fh_pubmed_fetch_articles(pmids)` | title, first author, year, publication types, retracted and level for up to 200 PMIDs at once |
+| `fh_citing_articles(id, types?, years?, sort?, max_results?)` | the articles that cite an article, in the columns of the PubMed search; filter by publication type and year, sort by newest or most cited |
 | `fh_clinicaltrials_search_studies(query \| intervention \| condition, status?, sort?, max_results?)` | search ClinicalTrials.gov: NCT ID, title, status, phase, enrollment, dates, primary outcome, conditions, interventions |
 | `fh_clinicaltrials_get_study_record(nct)` | one trial as a review needs it: status, design, enrollment, dates, outcomes, eligibility, result publications |
 | `fh_clinicaltrials_get_study_results(nct, max_chars?)` | a trial's posted results as Markdown, capped |
 | `fh_dailymed_search_labels(drug_name, labeler?, max_results?)` | find FDA drug labels by name: set ID, title, manufacturer, published date, version |
 | `fh_fetch_url(url, max_length?, start_index?, raw?, title_only?)` | a web page or PDF as Markdown (XML, JSON and other text as is), cached, through the download cascade; same answer as the standard fetch tool |
+| `fh_web_search(query, max_results?)` | search the web, `site:` included: title, URL, date, author and a short passage per result; offered when a search provider key is set |
 
 
 ## Quick Start
@@ -131,7 +149,7 @@ Works out of the box with the keyless sources (PubMed, PMC, Europe PMC, Unpaywal
 
 **Decider Model** (optional, for claim verification)
 
-- Choose the provider with `FH_VERIFY_PROVIDER` (`perplexity`, `google`, `openai`, or `liquid`); which one to take: [Decision models compared](docs/deciders.md)
+- Choose the provider with `FH_VERIFY_PROVIDER` (`perplexity`, `google`, `openai`, or `liquid`); for [evipedia.ai](https://evipedia.ai) we use the Perplexity Decider
 - Perplexity: set your [Perplexity API key](https://docs.perplexity.ai) or set up a local [Perplexity Decider for Mac](https://docs.perplexity.ai/docs/decisions/decider-for-mac)
 - Google: set your [Google AI Studio API key](https://aistudio.google.com/apikey); the free tier allows 50,000 input tokens per minute (one or two full-text papers), and on it Google may use what is sent to improve its products (the paid tier does not)
 - OpenAI: set your [OpenAI API key](https://platform.openai.com/api-keys)
@@ -140,6 +158,7 @@ Works out of the box with the keyless sources (PubMed, PMC, Europe PMC, Unpaywal
 **Download Cascade** (optional)
 
 - Configure the desired download services (fetch proxy, Playwright servers, Chrome, unlockers)
+- Unlockers: set the key of each you want — [Firecrawl](https://www.firecrawl.dev/app) `FH_FIRECRAWL_API_KEY`, [ZenRows](https://app.zenrows.com) `FH_ZENROWS_API_KEY`, [Zyte](https://app.zyte.com) `FH_ZYTE_API_KEY`, [Bright Data](https://brightdata.com) `FH_BRIGHTDATA_API_KEY`; every one with a key takes part
 - Tell your agent to run `<clone>/utilities/deploy.sh up` from your project folder (or with `--env <your .env>`) to deploy the configured cascade
 - Tell your agent to test the cascade for functionality and to detect accessibility issues (firewall, etc.)
 

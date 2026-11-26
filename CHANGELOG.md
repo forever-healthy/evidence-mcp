@@ -1,5 +1,21 @@
 # Forever Healthy Evidence MCP — Change Log
 
+### v1.1.0 — 2026-11-26
+
+* **Complete cited-by lists:** `fh_citing_articles` lists the articles that cite a paper — follow-up trials, later meta-analyses, guidelines and comments — filtered by type and year. Complete lists from OpenAlex, where PubMed's own cover only PubMed Central.
+* **Optimized web search:** `fh_web_search` replaces the model's built-in web search — links with a short passage from each page, from several search providers at once, with up to 95% fewer tokens. Offered when a provider key is set (`FH_WEB_SEARCH_EXA_API_KEY`, `FH_WEB_SEARCH_SERPER_API_KEY`, `FH_WEB_SEARCH_BRAVE_API_KEY`).
+
+* **Full texts for papers first seen in a PubMed batch:** reading or verifying a paper stored by `fh_pubmed_fetch_articles` now fetches its full text, as for a new paper.
+* **Fast abstract reads:** `fh_library_read` with `abstract_only: true` reads just the abstract, in milliseconds, without a full-text download.
+* **Improved claim verification on PDFs with lost symbols:** when a PDF's font lost the minus, ± or ≤ next to a claim's number, `fh_verify_claim` checks the claim again and answers `unverifiable` instead of a wrong `not_supported`.
+* **Clearer verdicts:** `fh_verify_claim` answers `supported`, `not_supported` or `unverifiable` (was `pass` / `fail`); verdicts cached before are judged again.
+* **Faster `fh_info`:** it answers without waiting for the library to be counted and no longer holds up other calls; the counts carry their time (`counted`) and are refreshed in the background, up to 10 minutes old.
+
+* **Added Firecrawl as an unlocker** (`FH_FIRECRAWL_API_KEY`).
+
+* **Named clients in the log:** `FH_CLIENT_NAME` names a project in the shared log (default: the host name), for several projects on one library; the log viewer shows the client column with `FH_CLIENT_SHOW=true` (was `FH_TUI_SHOW_CLIENT`, automatic by default).
+
+
 ### v1.0.17 — 2026-11-17
 
 * **Clearer setup hint for claim verification:** without a decision model the error names `FH_VERIFY_PROVIDER` and its API key, and `/ev verify` stops at once instead of filling a table of 🟡.

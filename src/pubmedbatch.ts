@@ -27,10 +27,12 @@ import { settings } from "./config.js";
 
 export const MAX_PMIDS = 200;
 export const COLUMNS = ["pmid", "title", "first_author", "year", "publication_types", "retracted", "level"] as const;
+// Study characteristics (src/characteristics.ts): three more columns, when any of the articles has them.
+export const CHARACTERISTIC_COLUMNS = ["design", "participants", "population"] as const;
 // level: abstract | full_text | title (nothing to read) | not found (PubMed has no such record — remembered for
 // retry_after_days, src/missing.ts) | invalid (not a PMID: PubMed IDs have at most eight digits)
-export type Row = [string, string | null, string | null, string | null, string | null, boolean | null, string];
-export type BatchResult = { columns: typeof COLUMNS; rows: Row[]; new: number; cached: number; not_found: number; invalid: number; asked: number };   // asked: PMIDs requested from PubMed (0: all from disk)
+export type Row = [string, string | null, string | null, string | null, string | null, boolean | null, string, (string | null)?, (number | null)?, (string | null)?];
+export type BatchResult = { columns: readonly string[]; rows: Row[]; new: number; cached: number; not_found: number; invalid: number; asked: number };   // asked: PMIDs requested from PubMed (0: all from disk)
 
 const EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi";
 export function efetchBatchUrl(pmids: string[]): string {
@@ -56,7 +58,7 @@ export function splitArticles(xml: string): Map<string, string> {
 }
 
 const row = (pmid: string, s: Status | null, level: string): Row =>
-  s ? [pmid, s.title ? s.title.replace(/\.$/, "") : s.title, s.first_author, s.year, reviewTypes(s.publication_types).join("; ") || null, s.retracted, level] : [pmid, null, null, null, null, null, level];
+  s ? [pmid, s.title ? s.title.replace(/\.$/, "") : s.title, s.first_author, s.year, reviewTypes(s.publication_types).join("; ") || null, s.retracted, level, s.design ?? null, s.participants ?? null, s.population ?? null] : [pmid, null, null, null, null, null, level, null, null, null];
 
 export type Fetch = (url: string) => Promise<string>;
 
@@ -89,5 +91,7 @@ export async function fetchArticles(ids: string[], libraryDir = FH_EVIDENCE_DIR,
     s = status(k)!;
     result.rows.push(row(k, s, String(s.level))); result.new++;
   }
+  if (result.rows.some((r) => r[7] != null)) result.columns = [...COLUMNS, ...CHARACTERISTIC_COLUMNS];
+  else result.rows = result.rows.map((r) => r.slice(0, COLUMNS.length) as Row);
   return result;
 }

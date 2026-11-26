@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { entryExists, readMeta, NOTHING_TO_VERIFY } from "../entry.js";
 import { parseId } from "../ids.js";
 import { entryPaths, FH_EVIDENCE_DIR } from "../layout.js";
-import { countUnresolved } from "../pdf.js";
+import { UNRESOLVED_GLYPH } from "../pdf.js";
 import { CORRECTED_HEADING } from "../entry.js";
 import type { VerifyConfig } from "./config.js";
 import type { Decide } from "./decider.js";
@@ -178,18 +178,18 @@ export type Basis = "full_text" | "abstract" | "title";   // title: PubMed has n
 export type VerifyResult = {
   claim: string;
   id: string;
-  verdict: "pass" | "fail" | "unverifiable" | "error";
+  verdict: "supported" | "not_supported" | "unverifiable" | "error";
   reason: string | null;         // a fail on a title-only record, or unverifiable: why, in one fixed sentence
   score: number | null;          // P(the paper states the finding)
   basis: Basis | null;           // what of the paper was read
   windows: number;               // model requests over the paper (1 unless windowed)
-  glyphs_unresolved: number;     // symbols the paper's PDF font gave no character for (−, ±, ≤ …): a fail may be the font, not the paper
+  glyphs_unresolved: number;     // numbers of the claim that stand next to a symbol the PDF's font lost (−, ±, ≤ …) in the full text: above 0, this verdict touched a lost symbol
   superseded: boolean | null;    // the claim uses a figure a stored correction replaced; null when the paper has no stored correction
   model: string | null;
   error?: string;
 };
 
-export type Paper = { id: string; basis: Basis; text: string } | { id: string; error: string };
+export type Paper = { id: string; basis: Basis; text: string; abstract?: string } | { id: string; error: string };   // abstract: beside a full text, the record with PubMed's abstract
 
 export async function readPaper(raw: string, libraryDir = FH_EVIDENCE_DIR): Promise<Paper> {
   const p = parseId(raw);
@@ -197,10 +197,28 @@ export async function readPaper(raw: string, libraryDir = FH_EVIDENCE_DIR): Prom
   const paths = entryPaths(libraryDir, p.type!, p.id!);
   if (!entryExists(paths)) return { id: p.requested, error: "not in library" };
   const full = existsSync(paths.fulltextMd);
-  if (full) return { id: p.requested, basis: "full_text", text: readFileSync(paths.fulltextMd, "utf8") };
   const meta = readMeta(paths);
+  if (full) return { id: p.requested, basis: "full_text", text: readFileSync(paths.fulltextMd, "utf8"), ...(meta.has_abstract && existsSync(paths.md) ? { abstract: readFileSync(paths.md, "utf8") } : {}) };
   return { id: p.requested, basis: meta.has_abstract ? "abstract" : "title", text: readFileSync(paths.md, "utf8") };
 }
+
+// A lost symbol (#95). A PDF font without a character map leaves a control character where the
+// minus, ±, ≤ … was; the decision model reads "\u00010.40" and a correct "−0.40" comes back
+// not_supported. Whether a verdict touched one is decided in the text, without the model: a
+// number of the claim stands directly next to a lost symbol. Numbers compare loosely (0.4 = 0.40).
+const numKey = (n: string) => { const x = n.replace(",", "."); return x.includes(".") ? x.replace(/0+$/, "").replace(/\.$/, "") : x; };
+const CTRL = UNRESOLVED_GLYPH.source;
+export function glyphsAtClaim(claim: string, text: string): number {
+  const mine = new Set((claim.match(/\d+(?:[.,]\d+)?/g) ?? []).map(numKey));
+  if (!mine.size) return 0;
+  let n = 0;
+  for (const m of text.matchAll(new RegExp(`${CTRL}\\s?(\\d+(?:[.,]\\d+)?)|(\\d+(?:[.,]\\d+)?)\\s?${CTRL}`, "g"))) if (mine.has(numKey(m[1] ?? m[2]))) n++;
+  return n;
+}
+// The claim without the symbols a font can lose, where they stand before a number; the text without the lost ones.
+// A sign only where it is one (not the hyphen of "5-10 mg" or "IL-6"); a relation anywhere before a number.
+export const withoutSymbols = (claim: string) => claim.replace(/(?<![\p{L}\p{N}])[\u2212\u2013+-]\s?(?=\.?\d)/gu, "").replace(/[\u00b1\u2264\u2265<>=~\u2248]\s?(?=\.?\d)/g, " ").replace(/\s+/g, " ").trim();
+export const LOST_SYMBOL = "the claim's number is in the text, but the PDF's font lost the symbol next to it (−, ±, ≤ …): its sign or relation cannot be read";
 
 // The verdict for one paper:
 //   pass    P(true) reaches the threshold
@@ -210,6 +228,10 @@ export async function readPaper(raw: string, libraryDir = FH_EVIDENCE_DIR): Prom
 //   unverifiable  only the abstract was read and does not state it — the
 //                 finding may be in the full text the library does not have;
 //                 reason says so
+//   A not_supported from a full text where a number of the claim stands next to a lost
+//   symbol is decided again: the abstract (PubMed's, no lost symbols) states it — supported,
+//   basis abstract; else the claim and the text without the symbols — supported there means the
+//   number is right and only its symbol unreadable: unverifiable, reason says so.
 //   error         the call cannot run: claim empty, names a source or is
 //                 compound; paper not in the library; no model; model failing
 export async function verifyClaim(claim: string, id: string, cfg: VerifyConfig | null, decide: Decide | null, read: (id: string) => Paper | Promise<Paper> = readPaper): Promise<VerifyResult> {
@@ -227,8 +249,8 @@ export async function verifyClaim(claim: string, id: string, cfg: VerifyConfig |
   if ("error" in paper) return { ...out, error: paper.error };
   if (!cfg || !decide) return { ...out, error: "no decision model configured: set FH_VERIFY_PROVIDER and its API key in .env" };
   out.basis = paper.basis;
-  out.glyphs_unresolved = countUnresolved(paper.text);
-  if (paper.basis === "title") return { ...out, verdict: "fail", reason: NOTHING_TO_VERIFY };
+  out.glyphs_unresolved = paper.basis === "full_text" ? glyphsAtClaim(claim, paper.text) : 0;
+  if (paper.basis === "title") return { ...out, verdict: "not_supported", reason: NOTHING_TO_VERIFY };
   const ws = windows(paper.text, cfg.window_chars);
   out.windows = ws.length;
   try {
@@ -246,8 +268,23 @@ export async function verifyClaim(claim: string, id: string, cfg: VerifyConfig |
   } catch (e) {
     return { ...out, error: e instanceof Error ? e.message : String(e) };
   }
-  if (out.score! >= cfg.threshold) return { ...out, verdict: "pass" };
-  return paper.basis === "full_text" ? { ...out, verdict: "fail" } : { ...out, verdict: "unverifiable", reason: "only the abstract is stored and it does not state the claim; the full text may" };
+  if (out.score! >= cfg.threshold) return { ...out, verdict: "supported" };
+  if (paper.basis === "full_text" && out.glyphs_unresolved > 0) {
+    try {
+      if (paper.abstract) {
+        let score = 0;
+        for (const w of windows(paper.abstract, cfg.window_chars)) { out.windows++; score = Math.max(score, (await decide({ paper: w, statement: claim }, { backed: { type: "noul", instructions: QUESTION } })).backed?.noul ?? 0); }
+        if (score >= cfg.threshold) return { ...out, verdict: "supported", score, basis: "abstract" };
+      }
+      const bare = withoutSymbols(claim);
+      let score = 0;
+      for (const w of windows(paper.text.replace(UNRESOLVED_GLYPH, ""), cfg.window_chars)) { out.windows++; score = Math.max(score, (await decide({ paper: w, statement: bare }, { backed: { type: "noul", instructions: QUESTION } })).backed?.noul ?? 0); }
+      if (score >= cfg.threshold) return { ...out, verdict: "unverifiable", reason: LOST_SYMBOL };
+    } catch (e) {
+      return { ...out, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  return paper.basis === "full_text" ? { ...out, verdict: "not_supported" } : { ...out, verdict: "unverifiable", reason: "only the abstract is stored and it does not state the claim; the full text may" };
 }
 
 // ---- Design notes: Claim verification — decisions, measurements, history ----
@@ -293,7 +330,7 @@ export async function verifyClaim(claim: string, id: string, cfg: VerifyConfig |
 //   `x-goog-api-key`, the state as `input` blocks). `src/verify/providers.ts`
 //   picks the provider from `FH_VERIFY_URL`'s host, so the settings stay
 //   `FH_VERIFY_*` for every provider; a new one is a file and one list entry.
-//   Measured 2026-11-12 (`stuff/bench`, 22 claims on 5 papers, abstract and
+//   Measured 2026-11-12 (`stuff/verify`, 22 claims on 5 papers, abstract and
 //   full text): both 22/22 and the same verdict on every claim. Perplexity
 //   (pplx-decider-v1.2) separates more sharply — true 0.98–1.00, false
 //   0.00–0.04 — than Google (true 0.94–0.98, false 0.02–0.20, the high one a
@@ -301,7 +338,7 @@ export async function verifyClaim(claim: string, id: string, cfg: VerifyConfig |
 //   Perplexity 583 ms; on Google's free tier (50,000 input tokens a minute)
 //   one call in ten waited out the limit, up to 84 s. A small set of written
 //   claims: every provider got it right.
-// - **Real review sentences** (2026-11-13, `stuff/bench`: 276 claims of the
+// - **Real review sentences** (2026-11-13, `stuff/verify`: 276 claims of the
 //   telmisartan review against its 72 sources; OpenAI and Nace's Drex Max
 //   joined). Backed: Perplexity 265, OpenAI 257, Google 250, Drex Max 235; all
 //   four agreed on 225, split on 44. By hand on the splits: Perplexity right on

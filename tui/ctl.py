@@ -8,11 +8,10 @@ Top:    nav menus — Log ((b)ottom, (t)op, (c)lear), Admin ((u)pdate, (q)uit); 
 Middle: <library>/logs/evidence.log, followed live (tail -F), coloured per field;
         (m)ark appends "==== mark <time> ====" between blank lines, (e)rase
         (pressed twice) truncates the file
-        (verify lines: verdict green / red / yellow for pass / fail / unverifiable,
+        (verify lines: verdict green / red / yellow for supported / not_supported / unverifiable,
         basis coloured like a level, score in blue, "verdict=" / "basis=" / "score=" dropped);
         the date and the word "tier" are not shown; the client column (who made the
-        call: today the server's host name) is shown when the log has several clients
-        (FH_TUI_SHOW_CLIENT=true / false forces it)
+        call: FH_CLIENT_NAME, else the server's host name) is shown with FH_CLIENT_SHOW=true
         FH_TUI_PULL=1 (default 0 = off): the same pull at the start of every rescan,
         quiet unless something changed or failed; one pull at a time per checkout (a lock
         in .git), a second TUI on the same checkout skips its cycle — for a TUI that
@@ -65,7 +64,7 @@ from textual.widgets import Input, Log, Select, Static  # noqa: E402
 
 NULL = getattr(Select, "NULL", getattr(Select, "BLANK", None))  # the "no selection" sentinel
 
-TUI_VERSION = 213   # plain counter: bump on every change to tui/
+TUI_VERSION = 251   # plain counter: bump on every change to tui/
 REPO_ROOT = Path(__file__).resolve().parents[1]   # this checkout: git pull, the TUI's own version and files
 CTL_PATH = Path(__file__).resolve()
 CWD = Path.cwd()                                   # the caller's project: its .env and its library (run.sh keeps it)
@@ -99,6 +98,11 @@ def _dotenv_file(f: Path, key: str) -> str | None:
             v = re.sub(r"\s+#.*$", "", v)   # an inline comment, as the server drops it (src/env-load.ts)
         return v or None
     return None
+
+
+def _evid_enabled() -> bool:
+    """The server offers EVIDs (FH_EVID_ENABLED)."""
+    return bool(re.match(r"^(true|1|yes|on)$", (_dotenv("FH_EVID_ENABLED") or "").strip(), re.I))
 
 
 def _default_library() -> Path:
@@ -136,22 +140,24 @@ LOG_FILE = LOG_FILE_NEW if LOG_FILE_NEW.is_file() or not LOG_FILE_OLD.is_file() 
 STATUS_SECS = max(5, int(_dotenv("FH_TUI_STATUS_SECS") or 60))
 STATUS_PORT = int(_dotenv("FH_TUI_PORT") or 0)       # /status endpoint on 0.0.0.0; 0 = none
 PULL = (_dotenv("FH_TUI_PULL") or "").lower() in ("1", "true", "yes", "on")   # git pull at the start of each rescan
-# The client column: who made the call (today the server's host name; with a
-# shared server, the user). FH_TUI_SHOW_CLIENT=true / false forces it; unset, it
-# is shown only when the log has more than one client — a single user's log has
-# one and the column only takes room, a fleet's has several (decided at start).
-def _log_clients(path: Path, tail_bytes: int = 2_000_000) -> int:
+# The client column: who made the call (FH_CLIENT_NAME of the server's project, else its host
+# name). Shown with FH_CLIENT_SHOW=true only — no looking into the log: what it holds at start
+# is chance (a cleared log has no client at all).
+SHOW_CLIENT = (_dotenv("FH_CLIENT_SHOW") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# The client column is as wide as the longest client name: of the log at start, then of any longer one that comes.
+def _client_width(path: Path, tail_bytes: int = 2_000_000) -> int:
     try:
         with path.open("rb") as f:
             f.seek(max(0, path.stat().st_size - tail_bytes))
             text = f.read().decode("utf-8", "replace")
     except OSError:
         return 0
-    return len({m.group(1) for m in re.finditer(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d (\S+) ", text, re.M)})
+    return max((len(m.group(1)) for m in re.finditer(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d (\S+) ", text, re.M)), default=0)
 
 
-_SHOW = (_dotenv("FH_TUI_SHOW_CLIENT") or "").strip().lower()
-SHOW_CLIENT = _SHOW not in ("0", "false", "no", "off") if _SHOW not in ("", "auto") else _log_clients(LOG_FILE) > 1
+CLIENT_WIDTH = _client_width(LOG_FILE) if SHOW_CLIENT else 0
 PULL_BUSY = "another TUI is pulling this checkout — skipped"
 BIND_RETRY_SECS = 300    # a port that could not be bound is tried again this often
 LOG_TAIL_BYTES = 4 << 20  # how much of evidence.log the last-hour counts read
@@ -179,16 +185,17 @@ C_FAIL = "#ff5f5f"       # red
 C_WARN = "#ffd75f"       # yellow: abstract-only outcomes
 C_MUTE = "#6c6c6c"       # dim grey: skipped / exists / non-events
 C_URL = "#5fa8ff"
-C_REMOTE = "default"     # the terminal's own text colour, the light grey of the counts rows (papers, trials, drug labels): an answer from outside just now ("remote"), beside the steel-blue "cached"
+C_NUM = C_URL            # blue: the numbers of an evidence map step
+C_REMOTE = "default"     # the terminal's own text colour, the light grey of the counts rows (articles, trials, drug labels): an answer from outside just now ("remote"), beside the steel-blue "cached"
 
 DATE = re.compile(r"^\d{4}-\d\d-\d\d (?=\d\d:\d\d:\d\d )")
-LINE = re.compile(r"^(?P<ts>(?:\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d) (?P<client>\S+) (?P<tool>\S+) +(?P<id>\S+) +(?P<msg>.*)$")
-# A line as shown with the client column hidden (FH_TUI_SHOW_CLIENT=false).
+LINE = re.compile(r"^(?P<ts>(?:\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d) (?P<client>\S+) +(?P<tool>\S+) +(?P<id>\S+) +(?P<msg>.*)$")
+# A line as shown with the client column hidden (FH_CLIENT_SHOW off).
 LINE_NO_CLIENT = re.compile(r"^(?P<ts>(?:\d{4}-\d\d-\d\d )?\d\d:\d\d:\d\d) (?P<client>)(?P<tool>\S+) +(?P<id>\S+) +(?P<msg>.*)$")
 # Columns padded for display: time client tool id word … — tool to 7 ("version"),
 # the ID to 13 ("pmid:" + 8 digits, so 7-digit IDs align), the first word of the message (tier name, done, exists) to 9 ("unpaywall").
 COLS = re.compile(r"^(\S+ \S+ )(\S+) (\S+) +(\S+)(?: (?=\S)|$)")   # " +": the verify line right-aligns its time after the ID
-TOOL_WIDTH, ID_WIDTH, WORD_WIDTH = 7, 13, 18   # word 18: "done", "exists" line up with a verify line's "unverifiable 00.7s" so full_text / abstract share a column
+TOOL_WIDTH, ID_WIDTH, WORD_WIDTH = 7, 13, 19   # word 19: "done", "exists" line up with a verify line's "not_supported 00.7s" so full_text / abstract share a column
 # "tier <name> …" lines are shown without the word "tier" (see LibLog): the
 # amber name carries it. So a tier line is <name> followed by a tier outcome.
 TIER = re.compile(r"^(?P<name>[a-z][a-z0-9_-]*) +(?P<rest>(?:ok\b|failed\b|skipped\b|located\b|fetched\b|try\b|aborted\b|abandoned\b|redirect\b|pdf link\b|http upgraded\b|https?://|(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}/|\d+ text-mining).*)$")   # a URL with or without its scheme
@@ -215,15 +222,15 @@ LEVEL = re.compile(r"(?<![-\w])(full_text|abstract|title|missing)\b")   # "level
 RETRIEVED = re.compile(r"retrieved_by=\S+")
 # Both line formats: the current one, time first, and the earlier one that
 # starts with the verdict (lines written before 2026-11-05 stay in the log).
-VERDICT = re.compile(r"^(?:(?P<secs>\d+\.\ds|cached) +)?(?:verdict=)?(?P<verdict>pass|fail|na|backed|not_backed|unverifiable|error)\b(?: +(?P<secs2>\d+\.\ds))?")
-VERDICT_COLOUR = {"pass": C_OK, "fail": C_FAIL, "na": C_WARN, "backed": C_OK, "not_backed": C_FAIL, "unverifiable": C_WARN}   # old words: lines before 2026-11-05
+VERDICT = re.compile(r"^(?:(?P<secs>\d+\.\ds|cached) +)?(?:verdict=)?(?P<verdict>supported|not_supported|pass|fail|na|backed|not_backed|unverifiable|error)\b(?: +(?P<secs2>\d+\.\ds))?")
+VERDICT_COLOUR = {"supported": C_OK, "not_supported": C_FAIL, "pass": C_OK, "fail": C_FAIL, "na": C_WARN, "backed": C_OK, "not_backed": C_FAIL, "unverifiable": C_WARN}   # old words: pass/fail before 2026-11-19, backed/not_backed before 2026-11-05
 
 
 # First words of a successful message (the colour convention): done, fetched, searched … — green.
 OK_WORDS = {"library", "added", "done", "exists", "fetched", "refreshed", "searched", "cached", "articles", "record", "results", "section", "query", "outline", "ok"}
 
 
-STAGE_STEP = re.compile(r"(?:^| )(ok|failed) +(fetch-proxy \S+|fetch|(?:playwright|chrome|browser) \S+|brightdata|zenrows|zyte)\b")
+STAGE_STEP = re.compile(r"(?:^| )(ok|failed) +(fetch-proxy \S+|fetch|(?:playwright|chrome|browser) \S+|brightdata|firecrawl|zenrows|zyte)\b")
 
 
 # The model called the MCP wrongly: a malformed ID, a URL as ID, a claim the
@@ -250,7 +257,7 @@ def verdict_fail(line: str) -> bool:
     if not m or m.group("tool") != "verify":
         return False
     v = VERDICT.match(m.group("msg"))
-    return bool(v) and v.group("verdict") in ("fail", "not_backed")
+    return bool(v) and v.group("verdict") in ("not_supported", "fail", "not_backed")
 
 
 def failed_call(line: str) -> bool:
@@ -278,6 +285,10 @@ def alert(line: str) -> bool:
     of the TUI's own. The Alerts only filter shows these."""
     m = LINE.match(line)
     return m.group("msg").startswith("!! ") if m else line.startswith("!!")
+
+
+# The first words of an evidence map step: what it did (query performance, failed query, …).
+EVMAP_STEP = re.compile(r"^([a-z]+)(?: +(failed))?:?(?: +(\d+\.\ds|cached)\b)?")   # spaces: on screen the word is padded to its column   # one step word (a column), "failed" after it, then its time (or "cached")
 
 
 class LogHighlighter(Highlighter):
@@ -311,6 +322,30 @@ class LogHighlighter(Highlighter):
         if msg.startswith("!! "):               # an alert: a service refused the deployment itself
             text.stylize(C_FAIL, base, base + len(msg))
             return
+        if m.group("tool") == "evmap":            # evidence map: a screening answer's relevance in colour
+            rv = re.match(r"screened(?:\s+(\d+\.\ds))?\s+(direct|indirect|background|off-topic)\b", msg)   # one abstract's answer: its time, its relevance
+            if rv:
+                if rv.group(1):
+                    text.stylize(C_MUTE, base + rv.start(1), base + rv.end(1))
+                text.stylize({"direct": C_OK, "indirect": C_TIER, "background": C_MUTE, "off-topic": C_FAIL}[rv.group(2)], base + rv.start(2), base + rv.end(2))
+            elif (sf := re.match(r"(screen failed|refused) (\d+\.\ds)", msg)):   # an abstract not screened
+                text.stylize(C_TIER, base, base + sf.end(1)); text.stylize(C_MUTE, base + sf.start(2), base + sf.end(2))
+            elif m.group("id").startswith("evid:"):   # a step of the map: its word green (done) or amber/red (failed), its numbers blue
+                head = msg.split(" · ", 1)[0] if msg.startswith("query ") else msg   # a query line: not the query's own numbers
+                st = EVMAP_STEP.match(msg)
+                start = st.end() if st else 0
+                if st:
+                    word = st.group(1)
+                    colour = C_FAIL if word == "error" else C_TIER if st.group(2) else None if word in ("searching", "screening", "fetching") else C_OK
+                    if colour:
+                        text.stylize(colour, base, base + (st.end(2) if st.group(2) else st.end(1)))
+                    if st.group(3):   # its time grey, "cached" green — as on a verify line
+                        text.stylize(C_OK if st.group(3) == "cached" else C_MUTE, base + st.start(3), base + st.end(3))
+                for c in re.finditer(r"\bcached\b", head[start:]):   # "17 cached", "6239 cached": the cache hits green, as everywhere
+                    text.stylize(C_OK, base + start + c.start(), base + start + c.end())
+                for n in re.finditer(r"(?<![\w-])\d[\d/.]*(?![\w-])", head[start:]):   # whole numbers, not the 5 in claude-opus-5-5
+                    text.stylize(C_NUM, base + start + n.start(), base + start + n.end())
+                return   # a step line is done: the fetch and tier rules below are for other tools
         if m.group("tool") == "fetch":         # fetch: grey by default; the outcome words below take their colours over it
             text.stylize(C_MUTE, base, base + len(msg))
         if m.group("tool") == "search" and m.group("id") == "web":   # web search: a provider's try/ok/failed as a fetch stage's; the query in blue
@@ -329,12 +364,12 @@ class LogHighlighter(Highlighter):
             text.stylize(C_SOURCE, base + t.start("name"), base + t.end("name"))
             rest = t.group("rest")
             off = base + t.start("rest")
-            if rest.startswith("ok") or rest.endswith(" ok") or re.search(r" ok (fetch-proxy [\w.@-]+|fetch|(?:playwright|chrome|browser) [\w.@-]+|brightdata|zenrows|zyte)$", rest):
+            if rest.startswith("ok") or rest.endswith(" ok") or re.search(r" ok (fetch-proxy [\w.@-]+|fetch|(?:playwright|chrome|browser) [\w.@-]+|brightdata|firecrawl|zenrows|zyte)$", rest):
                 text.stylize(C_OK, off, base + len(msg))
             elif rest.startswith("failed") or " failed" in rest:   # one source or stage failed: a step, amber — the add's outcome is its "done" line
                 i = rest.find("failed")
                 text.stylize(C_TIER, off + i, base + len(msg))
-            elif rest.startswith("skipped") or re.search(r" skipped ((?:fetch-proxy|playwright|chrome|browser) \S+|brightdata|zenrows|zyte):", rest):   # a stage skipped for a host's wall: a non-event, grey
+            elif rest.startswith("skipped") or re.search(r" skipped ((?:fetch-proxy|playwright|chrome|browser) \S+|brightdata|firecrawl|zenrows|zyte):", rest):   # a stage skipped for a host's wall: a non-event, grey
                 text.stylize(C_MUTE, off, base + len(msg))
             elif rest.startswith("located") or "text-mining links" in rest:
                 text.stylize(C_MUTE, off, base + len(msg))
@@ -379,12 +414,12 @@ class LogHighlighter(Highlighter):
             c = msg.find(" | ")
             if c >= 0:
                 text.stylize(C_MUTE, base + c, base + len(msg))
-        elif msg.startswith("exists") or msg.startswith("missing"):
+        elif msg.startswith("exists") or msg.startswith("missing") or msg.startswith("untried"):
             text.stylize(C_MUTE, base, base + len(msg))
             if msg.startswith("exists"):          # the entry is there: the word in green, the rest grey
                 text.stylize(C_OK, base, base + len("exists"))
-            elif "adding first" in msg:          # read/verify "missing adding first": a step, amber
-                text.stylize(C_TIER, base, base + len("missing"))
+            elif " adding" in msg:               # read/verify "missing adding first", "missing adding abstract only", "untried adding first" (full text never tried): a step, amber
+                text.stylize(C_TIER, base, base + len(msg.split(" ", 1)[0]))
             else:                                 # missing (status): the answer, red
                 text.stylize(C_FAIL, base, base + len("missing"))
             lv = LEVEL.search(msg)
@@ -472,6 +507,8 @@ class LibLog(Log):
             cc = self.highlighter.client_colour
             if client not in cc:
                 cc[client] = C_CLIENTS[len(cc) % len(C_CLIENTS)]
+            global CLIENT_WIDTH
+            CLIENT_WIDTH = max(CLIENT_WIDTH, len(client))
             tool, ident, word = m.group(2), m.group(3), m.group(4)
             # A set ID is 36 characters: shown as its first 3 with an ellipsis, so
             # label lines fit the ID column ("dailymed:bcd…" is 13, the column's width).
@@ -495,18 +532,18 @@ class LibLog(Log):
             word = word.replace("level=", "")          # "status … level=missing": the word is the whole message
             if word in ("articles", "record") and not re.match(r"\d+\.\ds", rest):
                 # PubMed rows all from disk, a stored trial record: no time (1.0.2); the column kept blank
-                col = f"{word:<12} {'':>5}"
+                col = f"{word:<13} {'':>5}"
             elif word in ("~", "cached") or re.fullmatch(r"\d+\.\ds", word):
                 # On screen the verdict comes first, then the time: "pass  02.8s full_text 0.999"
-                # (the file keeps the time first). 12 + 1 + 5 + 1 = 19, the same column for the basis.
+                # (the file keeps the time first). 13 + 1 + 5 + 1 = 20, the same column for the basis.
                 rest = rest.replace("basis=", "").replace("score=", "", 1).replace("provider=", "", 1)
-                vm = re.match(r"(?:verdict=)?(pass|fail|na|error|backed|not_backed|unverifiable) *", rest)
+                vm = re.match(r"(?:verdict=)?(supported|not_supported|pass|fail|na|error|backed|not_backed|unverifiable) *", rest)
                 head, sep, tail = rest.partition(" | ")
                 if word not in ("~", "cached") and re.search(r" cached(?= |$)", head):   # a cached verdict before 1.0.3: "00.0s … cached [glyphs=3] | claim"
                     word, rest = "cached", re.sub(r" cached(?= |$)", "", head, count=1) + sep + tail
-                    vm = re.match(r"(?:verdict=)?(pass|fail|na|error|backed|not_backed|unverifiable) *", rest)
+                    vm = re.match(r"(?:verdict=)?(supported|not_supported|pass|fail|na|error|backed|not_backed|unverifiable) *", rest)
                 if vm:
-                    col = f"{vm.group(1):<12} {'' if word in ('~', 'cached') else word:>5}"
+                    col = f"{vm.group(1):<13} {'' if word in ('~', 'cached') else word:>5}"
                     rest = ("cached " if word == "cached" else "remote ") + rest[vm.end():]   # where the verdict came from: the cache (time blank) or the model just now
                 else:
                     col = f"{word:>5}"
@@ -514,14 +551,14 @@ class LibLog(Log):
                 # "done 08.3s level=…", "ok 00.6s rows=…" (a search; "searched" before 1.0.3), "fetched 00.1s html …", "articles 00.6s …":
                 # the duration in one column beside the word, the rest keeps its place
                 cached = tm.group(1) == "cached"   # from disk: the time column blank, "cached" opens the details
-                col = f"{word:<12} {'' if cached else tm.group(1):>5}"
+                col = f"{word:<13} {'' if cached else tm.group(1):>5}"
                 # A line that can be cached (a search, a fetch's outcome) says where it came from: cached, or remote just now
                 rest = ("cached " if cached else "remote " if tool in ("search", "fetch") and word != "failed" else "") + rest[tm.end():].lstrip()   # a failure says its reason, not where an answer came from
             elif tool in ("startup", "version", "info", "get_version"):
                 col = f"{'':<{WORD_WIDTH}} {word}"   # a one-line message, not an action: no word of its own, the text in the details column
             else:
                 col = f"{word:<{WORD_WIDTH}}"
-            line = f"{m.group(1) if SHOW_CLIENT else ts + ' '}{tool:<{TOOL_WIDTH}} {ident:<{ID_WIDTH}} " + (f"{col} {rest}" if rest else word)
+            line = f"{f'{ts} {client:<{CLIENT_WIDTH}} ' if SHOW_CLIENT else ts + ' '}{tool:<{TOOL_WIDTH}} {ident:<{ID_WIDTH}} " + (f"{col} {rest}" if rest else col if tool in ("startup", "version", "info", "get_version") else word)   # a one-word message (a switch name) in the details column too
         return line   # URLs whole (2026-11-13): they end the line, the window cuts them off
 
     def _short(self, m: re.Match) -> str:
@@ -604,9 +641,9 @@ BUILTIN_TIERS = ["pmc", "europepmc", "tdm", "unpaywall", "openalex", "core"]
 
 
 def active_tiers() -> list[str]:
-    """The source sequence as the server resolves it (src/config.ts): FH_TIERS
+    """The source sequence as the server resolves it (src/config.ts): FH_SOURCES
     verbatim, else the built-in order plus proxy when its URL is set."""
-    listed = _dotenv("FH_TIERS")
+    listed = _dotenv("FH_SOURCES")
     if listed:
         return [t.strip() for t in listed.split(",") if t.strip()]
     return BUILTIN_TIERS + (["proxy"] if _dotenv("FH_PROXY_URL") else [])
@@ -624,7 +661,7 @@ VERIFY_PROVIDERS = {
 
 UNLOCK_EVERY = 15 * 60   # a live unlocker check costs a request: at most every 15 minutes per unlocker
 _unlock_last: dict = {}   # name -> last result
-UNLOCKERS = (("zenrows", "FH_ZENROWS_API_KEY"), ("zyte", "FH_ZYTE_API_KEY"), ("brightdata", "FH_BRIGHTDATA_API_KEY"))   # src/unlock.ts order
+UNLOCKERS = (("firecrawl", "FH_FIRECRAWL_API_KEY"), ("zenrows", "FH_ZENROWS_API_KEY"), ("zyte", "FH_ZYTE_API_KEY"), ("brightdata", "FH_BRIGHTDATA_API_KEY"))   # src/unlock.ts order
 
 
 def unlocker_order() -> list[str]:
@@ -639,6 +676,10 @@ def _unlock_request(name: str):
     if name == "zenrows":
         from urllib.parse import quote
         return urllib.request.Request(f"https://api.zenrows.com/v1/?apikey={quote(_dotenv('FH_ZENROWS_API_KEY') or '')}&url={quote('https://example.com/')}&mode=auto", headers={"User-Agent": "evidence-mcp-tui"}), lambda b, h: b
+    if name == "firecrawl":
+        body = json.dumps({"url": "https://example.com/", "formats": ["rawHtml"], "parsers": [], "proxy": "auto"}).encode()
+        return urllib.request.Request("https://api.firecrawl.dev/v2/scrape", data=body, headers={"Authorization": f"Bearer {_dotenv('FH_FIRECRAWL_API_KEY')}", "Content-Type": "application/json", "User-Agent": "evidence-mcp-tui"}), \
+            lambda b, h: ((json.loads(b or b"{}").get("data") or {}).get("rawHtml") or "").encode()
     if name == "zyte":
         auth = base64.b64encode(((_dotenv("FH_ZYTE_API_KEY") or "") + ":").encode()).decode()
         body = json.dumps({"url": "https://example.com/", "httpResponseBody": True}).encode()
@@ -690,10 +731,7 @@ _search_last: dict = {}   # name -> last result
 
 
 def searcher_order() -> list[str]:
-    """The web search providers that take part (src/websearch.ts): every one with a key,
-    and none unless FH_WEB_SEARCH_ENABLED is true (development only)."""
-    if not re.fullmatch(r"(?i)true|1|yes|on", (_dotenv("FH_WEB_SEARCH_ENABLED") or "").strip()):
-        return []
+    """The web search providers that take part (src/websearch.ts): every one with a key."""
     return [n for n, k in SEARCHERS if _dotenv(k)]
 
 
@@ -869,8 +907,8 @@ class Alerts:
     a verify with a verdict, a restart without it), or after ALERT_HOURS
     without a repeat. Fed every log line, from the start-up read and each poll."""
 
-    STAGE = re.compile(r"^((?:fetch-proxy|playwright|chrome|browser) \S+|brightdata|zenrows|zyte): ")
-    OK = re.compile(r"(?:^| )ok ((?:fetch-proxy|playwright|chrome|browser) \S+|brightdata|zenrows|zyte)\b")
+    STAGE = re.compile(r"^((?:fetch-proxy|playwright|chrome|browser) \S+|brightdata|firecrawl|zenrows|zyte): ")
+    OK = re.compile(r"(?:^| )ok ((?:fetch-proxy|playwright|chrome|browser) \S+|brightdata|firecrawl|zenrows|zyte)\b")
     VERIFY_ERR = re.compile(r"^\d+\.\d+s (?:verdict=)?error +(.*?)(?: \| .*)?$")   # "error …" since 0.2.30, "verdict=error …" before
 
     def __init__(self) -> None:
@@ -1019,7 +1057,9 @@ def _read_entry(ent: str, typ: str, name: str) -> dict | None:
         size = 0
     return {"level": lv.group(1) if lv else "unknown", "size": size,
             "retracted": bool(re.search(r"^retracted: (yes|true)", head, re.M)),
-            "no_abstract": bool(re.search(r"^has_abstract: (no|false)", head, re.M))}   # absent = has one
+            "no_abstract": bool(re.search(r"^has_abstract: (no|false)", head, re.M)),   # absent = has one
+            # stored from PubMed alone (a batch, the evidence map): no full-text source tried yet
+            "not_tried": bool(lv and lv.group(1) == "abstract" and re.search(r"^attempts:[ \t]*$", head, re.M))}
 
 
 def _dirs(path: str):
@@ -1059,7 +1099,7 @@ def scan_library(lib: Path) -> dict:
         return out
     seen: set[str] = set()
     for typ in _dirs(str(lib)):
-        if typ.name.startswith(".") or typ.name in ("verify", "search", "logs"):   # bookkeeping, no entries
+        if typ.name.startswith(".") or typ.name in ("verify", "search", "logs", "evid", "evmap"):   # bookkeeping and the EVID store, no entries
             continue
         for l1 in _dirs(typ.path):
             for l2 in _dirs(l1.path):
@@ -1082,7 +1122,7 @@ def scan_library(lib: Path) -> dict:
                     out["entries"] += 1
                     out["by_level"][level] = out["by_level"].get(level, 0) + 1
                     out["by_type"][typ.name] = out["by_type"].get(typ.name, 0) + 1
-                    t = out["types"].setdefault(typ.name, {"entries": 0, "full_text": 0, "abstract": 0, "no_abstract": 0, "retracted": 0, "bytes": 0})
+                    t = out["types"].setdefault(typ.name, {"entries": 0, "full_text": 0, "abstract": 0, "no_abstract": 0, "not_tried": 0, "retracted": 0, "bytes": 0})
                     t["entries"] += 1
                     t["bytes"] += rec["size"]
                     out["bytes"] += rec["size"]
@@ -1092,10 +1132,15 @@ def scan_library(lib: Path) -> dict:
                     out["no_abstract"] += rec["no_abstract"]
                     t["retracted"] += rec["retracted"]
                     t["no_abstract"] += rec["no_abstract"]
+                    t["not_tried"] += rec.get("not_tried", False)
     for gone in [k for k in _ENTRIES if k not in seen]:   # deleted entries
         del _ENTRIES[gone]
     # verify/<2>/<4>/<key>.json: one file per cached verdict (fh_verify_claim)
     out["verdicts"] = _count_json(str(lib / "verify"))
+    # EVIDs (evid/<2>/<4>/<16 hex>/), and how many hold an evidence map (evmap/evmap.db)
+    evids = [d for l1 in _dirs(str(lib / "evid")) for l2 in _dirs(l1) for d in _dirs(l2)]
+    out["evids"] = len(evids)
+    out["evmaps"] = sum(1 for d in evids if os.path.exists(os.path.join(d, "evmap", "evmap.db")))
     # search/<2>/<4>/<key>.json: one file per cached registry search (fh_clinicaltrials_search_studies)
     out["searches"] = _count_json(str(lib / "search"))
     out["servers"] = read_servers(lib)
@@ -1162,6 +1207,15 @@ class AlertsToggle(Static):
         self.app.action_alerts_toggle()
 
 
+def _background(fn) -> None:
+    """Run fn on a daemon thread, not a Textual thread worker: Textual's exit
+    waits for its workers, so a quit hung until the scan's slowest check (an
+    unlocker's 120 s timeout) or the status endpoint's bind retry ended. Each
+    caller guards against a second run itself (_scanning, _updating,
+    _status_server)."""
+    threading.Thread(target=fn, daemon=True).start()
+
+
 class Ctl(App):
     CSS = """
     Screen  { background: ansi_default; }
@@ -1211,11 +1265,11 @@ class Ctl(App):
     }
     #status-bar { height: 16; background: transparent; }
     #status-divider { width: 1fr; height: 1; padding: 0 1; color: #4e4e4e; background: transparent; text-wrap: nowrap; text-overflow: clip; }
-    #status-row-server, #status-row-fh_verify_claim, #status-row-websearch, #status-row-1, #status-row-verify, #status-row-unlocker, #status-row-fetch, #status-row-playwright, #status-row-chrome, #status-row-2, #status-row-3, #status-row-doi, #status-row-4, #status-row-5, #status-row-url, #status-row-verdicts, #status-row-search { height: 1; background: transparent; }
+    #status-row-server, #status-row-fh_verify_claim, #status-row-websearch, #status-row-1, #status-row-verify, #status-row-unlocker, #status-row-fetch, #status-row-playwright, #status-row-chrome, #status-row-2, #status-row-3, #status-row-doi, #status-row-4, #status-row-5, #status-row-url, #status-row-verdicts, #status-row-evid, #status-row-search { height: 1; background: transparent; }
     #row-verify, #row-unlock, #row-websearch, #row-fetch, #row-playwright, #row-chrome { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-doi { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-pmid, #row-dailymed { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
-    #row-nct, #row-url, #row-verdicts, #row-search { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
+    #row-nct, #row-url, #row-verdicts, #row-evid, #row-search { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #status  { width: 1fr;  height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #scan    { width: auto; height: 1; padding: 0 2 0 0; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
     #endpoint { width: auto; height: 1; padding: 0; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
@@ -1223,7 +1277,8 @@ class Ctl(App):
     #row2-spacer { width: 1fr; height: 1; background: transparent; }
     #ver     { width: auto; height: 1; padding: 0 1 0 0; color: #5fa8ff; background: transparent; text-wrap: nowrap; }
     .sep     { width: auto; height: 1; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
-    #sep-endpoint, #sep-note, #sep-health { display: none; }
+    #sep-endpoint, #sep-note, #sep-health, #sep-items, #items { display: none; }
+    #items   { width: auto; height: 1; padding: 0; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
     #health  { width: auto; height: 1; padding: 0; background: transparent; text-wrap: nowrap; }
     #note    { width: auto; height: 1; padding: 0; color: #6c6c6c; background: transparent; text-wrap: nowrap; }
     #note.alert { color: #ff5f5f; }
@@ -1247,6 +1302,7 @@ class Ctl(App):
         Binding("e", "erase", "erase", priority=True),    # truncate evidence.log (press twice)
         Binding("r", "rotate", "rotate", priority=True),  # evidence.log → a dated file, a fresh log, its alerts cleared
         Binding("s", "refresh", "rescan", priority=True),  # rescan now (Admin menu), else every STATUS_SECS
+        Binding("x", "details", "details", priority=True),   # the status lines under the log: all of them, or the first alone — the log gets the room
         Binding("u", "update", "update", priority=True),
         Binding("q", "quit", "quit", priority=True),
         Binding("ctrl+c", "copy", "copy", priority=True, show=False),   # copy the selection (auto-copied on mouse-up anyway)
@@ -1323,6 +1379,8 @@ class Ctl(App):
                 yield Static("", id="health")   # the /status verdict: healthy, or degraded and what is wrong
                 yield Static("  ·  ", id="sep-health", classes="sep")
                 yield Static("", id="mcps")
+                yield Static("  ·  ", id="sep-items", classes="sep")   # the library's entry count: shown when the other lines are folded away
+                yield Static("", id="items")
                 yield Static("  ·  ", id="sep-endpoint", classes="sep")   # shown with the port
                 yield Static("", id="endpoint")
                 yield Static("", id="server-spacer")
@@ -1360,8 +1418,33 @@ class Ctl(App):
                 yield Static("", id="row-url")
             with Horizontal(id="status-row-verdicts"):
                 yield Static("", id="row-verdicts")
-            with Horizontal(id="status-row-search"):   # … version in the lower right corner
+            with Horizontal(id="status-row-search"):
                 yield Static("", id="row-search")
+            with Horizontal(id="status-row-evid"):   # the last line (hidden when the server offers no EVIDs)
+                yield Static("", id="row-evid")
+
+    def _layout_status(self) -> None:
+        """The status lines under the log. Unfolded: every line this setup uses. Folded (key x): the
+        first line alone — the servers' health, how many MCPs, the library's entry count, and at the
+        right the view's state, the rescan and the version — so the log gets the room."""
+        bar = self.query_one("#status-bar")
+        shown = 0
+        for child in bar.children:
+            row = f"#{child.id}"
+            child.display = row == "#status-row-server" or (not self._folded and row not in self._off_rows)
+            shown += 1 if child.display else 0
+        bar.styles.height = shown
+        for w in ("#sep-items", "#items"):
+            self.query_one(w).display = self._folded
+        # folded, the one line holds more: its dots get one space each side, so the version at the right stays in view
+        for sep in self.query("#status-row-server .sep"):
+            sep.update(" · " if self._folded else "  ·  ")
+
+    def action_details(self) -> None:
+        self._folded = not self._folded
+        self._layout_status()
+        if not self._status_note:   # the hint at the right names the other state now
+            self._set_status()
 
     def _ensure_log(self) -> None:
         """At startup, no log yet (a new or emptied library, no server started on it): an
@@ -1381,9 +1464,10 @@ class Ctl(App):
     def on_mount(self) -> None:
         self.title = "evidence-mcp"
         self.query_one("#log-select", Select).focus()
-        if not searcher_order():   # no web search provider configured: no web search line
-            self.query_one("#status-row-websearch").display = False
-            self.query_one("#status-bar").styles.height = 15
+        # the status lines this setup has no use for: no web search provider — no web search line; no EVIDs — no EVID line
+        self._off_rows = {r for r, off in (("#status-row-websearch", not searcher_order()), ("#status-row-evid", not _evid_enabled())) if off}
+        self._folded = True   # the first line alone at startup; x unfolds
+        self._layout_status()
         self._ensure_log()
         self._load_tail()
         self._refresh_clients(list(self._raw))
@@ -1409,7 +1493,9 @@ class Ctl(App):
         self._status_note = note
         n = self.query_one("#note", Static)
         # Following the log: the key that pauses it, in grey.
-        shown = note or (Text("Space to pause log", style=C_MUTE) if LOG_FILE.is_file() else "")
+        view = "e(x)pand" if getattr(self, "_folded", False) else "x to collapse"   # folded: short, the key inside the word
+        dot = " · " if getattr(self, "_folded", False) else "  ·  "
+        shown = note or (Text(f"Space to pause{dot}{view}", style=C_MUTE) if LOG_FILE.is_file() else Text(view, style=C_MUTE))
         n.update(shown)
         n.set_class(alert, "alert")
         self.query_one("#sep-note", Static).display = bool(shown)
@@ -1554,7 +1640,7 @@ class Ctl(App):
             self._start_scan()
             left = STATUS_SECS
         self.query_one("#scan", Static).update(
-            "scanning…" if self._scanning else f"rescan in {max(left, 0)}s")
+            "scanning…" if self._scanning else f"rescan {max(left, 0)}s")
 
     def _start_scan(self) -> None:
         if self._scanning:
@@ -1562,7 +1648,7 @@ class Ctl(App):
         self._next_scan = time.monotonic() + STATUS_SECS
         self._last_scan_start = time.monotonic()
         self._scanning = True
-        self.run_worker(self._scan, thread=True, exclusive=True, group="scan")
+        _background(self._scan)
 
     def _scan(self) -> None:
         if PULL and not self._updating:
@@ -1683,32 +1769,37 @@ class Ctl(App):
         # padded to 10 — so abstracts, hits, the size all start in the same column.
         BLUE = Style(color=C_URL, bold=True)
         def row(label: str, count: int, unit: str) -> Text:
-            r = Text(); r.append(f"{label:<9}", style=C_TOOL); r.append(str(count).rjust(5), style=BLUE); r.append(f" {unit:<14}")
+            # label and count share 14 columns: a count past 5 digits takes the label's padding (pmid: room for 10 digits), the units stay aligned
+            r = Text(); r.append(label, style=C_TOOL); r.append(str(count).rjust(14 - len(label)), style=BLUE); r.append(f" {unit:<14}")
             return r
         def seg(r: Text, n: object, word: str, style: object = None) -> Text:
             r.append("  ").append(str(n).rjust(5), style=style if word != "" else BLUE).append(f" {word:<10}", style=style)
             return r
         types = res.get("types", {})
+        # the whole library in one figure, for the folded status line (key x)
+        total = sum(int(t.get("entries", 0)) for t in types.values() if isinstance(t, dict))
+        self.query_one("#items", Static).update(Text(f"{total:,}", style=BLUE).append(" items", style=C_MUTE))
         # The size on the location row (no total line: the rows below count per type).
         self._lib_size = human(res.get("bytes", 0))
         d = res.get("disk")
         self._disk = (d["pct"], d["total"]) if d else None
         if not self._status_note:
             self._set_status()
-        # papers, by pmid: and by doi: (PubMed does not index them): abstracts (entries that have
-        # one — title-only records don't), full texts, title-only, retracted
-        def papers(label: str, key: str) -> Text:
-            p = types.get(key, {"entries": 0, "full_text": 0, "abstract": 0, "no_abstract": 0, "retracted": 0})
-            r = row(label, p["entries"], "papers")
+        # articles, by pmid: and by doi: (PubMed does not index them): abstracts (entries that have
+        # one — title-only records don't), full texts, title-only, full text not tried, retracted
+        def articles(label: str, key: str) -> Text:
+            p = types.get(key, {"entries": 0, "full_text": 0, "abstract": 0, "no_abstract": 0, "not_tried": 0, "retracted": 0})
+            r = row(label, p["entries"], "articles")
             seg(r, p["entries"] - p["no_abstract"], "abstracts", C_WARN)
-            seg(r, p["full_text"], "full_text", C_OK)
+            seg(r, p["full_text"], "full texts", C_OK)
+            seg(r, p.get("not_tried", 0), "not tried", C_SOURCE)   # full text not tried yet; always shown, in a fixed column; the next read or verification fetches it
             if p["no_abstract"]:
                 seg(r, p["no_abstract"], "title-only", C_MUTE)
             if p["retracted"]:
                 seg(r, p["retracted"], "retracted", C_FAIL)
             return r
-        self.query_one("#row-pmid", Static).update(papers("pmid", "pmid"))
-        self.query_one("#row-doi", Static).update(papers("doi", "doi"))
+        self.query_one("#row-pmid", Static).update(articles("pmid", "pmid"))
+        self.query_one("#row-doi", Static).update(articles("doi", "doi"))
         self.query_one("#row-dailymed", Static).update(row("dailymed", types.get("dailymed", {"entries": 0})["entries"], "drug labels"))
         self.query_one("#row-nct", Static).update(row("nct", types.get("nct", {"entries": 0})["entries"], "trials"))
         # the cache rows: hits and misses summed over the servers alive on this library (src/stats.ts)
@@ -1726,6 +1817,9 @@ class Ctl(App):
         self.query_one("#row-url", Static).update(r)
         r = cache_row("verify", res.get("verdicts", 0), "claims cached", "verify")
         self.query_one("#row-verdicts", Static).update(r)
+        # EVIDs, only when the server offers them (FH_EVID_ENABLED); how many hold an evidence map
+        if _evid_enabled():
+            self.query_one("#row-evid", Static).update(seg(row("evid", res.get("evids", 0), "EVIDs"), res.get("evmaps", 0), "evmaps", C_OK))
         # How many MCP servers run on this library (their .servers/ files): the hits and misses above are summed over them.
         m = Text()
         if sv:
@@ -1983,7 +2077,7 @@ class Ctl(App):
 
     def _start_status_server(self) -> None:
         if STATUS_PORT and self._status_server is None:
-            self.run_worker(self._ensure_status_server, thread=True, exclusive=True, group="status-http")
+            _background(self._ensure_status_server)
 
     def _ensure_status_server(self) -> None:
         """Bind 0.0.0.0:PORT (the container publishes the port, the host's
@@ -1997,17 +2091,19 @@ class Ctl(App):
             err = f"cannot bind :{STATUS_PORT}: {e.strerror or e}"
             if err != self._status_err:
                 self._status_err = err
-                self.call_from_thread(self._show_endpoint, f"port {STATUS_PORT} off — {e.strerror or e}", True)
+                self.call_from_thread(self._show_endpoint, f":{STATUS_PORT} off — {e.strerror or e}", True)
                 self.call_from_thread(self._log().write_line, f"!! status endpoint off: {err} — retrying every {BIND_RETRY_SECS // 60} min")
             return
         threading.Thread(target=srv.serve_forever, name="status-http", daemon=True).start()
         self._status_server, self._status_err = srv, None
-        self.call_from_thread(self._show_endpoint, f"port {STATUS_PORT}", False)
+        self.call_from_thread(self._show_endpoint, f":{STATUS_PORT}", False)
         self.call_from_thread(self._log().write_line, f"─── status endpoint: http://0.0.0.0:{STATUS_PORT}/status ───")
 
     def _show_endpoint(self, text: str, alert: bool) -> None:
         w = self.query_one("#endpoint", Static)
-        w.update(text)
+        # the port: its colon grey, the number amber; an alert stays one colour (red, by its class)
+        port = re.fullmatch(r":(\d+)", text)
+        w.update(Text(":", style=C_MUTE).append(port.group(1), style=C_TIER) if port and not alert else text)
         w.set_class(alert, "alert")
         self.query_one("#sep-endpoint", Static).display = bool(text)
 
@@ -2124,7 +2220,7 @@ class Ctl(App):
             return
         self._updating = True
         self._log().write_line("─── update: git pull ───")
-        self.run_worker(self._update, thread=True, exclusive=True, group="update")
+        _background(self._update)
 
     def _check_self(self) -> None:
         """tui/ changed on disk (a pull, or a commit in this checkout): restart."""
@@ -2185,3 +2281,8 @@ if __name__ == "__main__":
         # terminal by now. run.sh is not re-run, so a changed requirements.txt
         # needs a manual restart.
         os.execv(sys.executable, [sys.executable, str(CTL_PATH)] + sys.argv[1:])
+    # A quit: don't let Python's exit join the scan's check threads still in
+    # flight (its ThreadPoolExecutor) -- the terminal is restored already.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

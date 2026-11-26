@@ -17,7 +17,7 @@ const PERMANENT = /^(no pmcid|no doi|no pmid|no pmid or doi|no body|closed|no oa
 // transient again, for after a change of method (2026-10-28).
 const BLOCKED = /^(challenge not cleared|empty response)/i;
 // The stage that produced a download reason ("browser dc-server: …", "zyte: …").
-const STAGE = /^((?:playwright|chrome|browser|fetch-proxy) [^:]+|brightdata|zenrows|zyte|unlocker): /;
+const STAGE = /^((?:playwright|chrome|browser|fetch-proxy) [^:]+|brightdata|firecrawl|zenrows|zyte|unlocker): /;
 
 export function isPermanent(reason: string, retryBlocked = false): boolean {
   // A download tier lists one reason per URL; it is permanent only if every URL's reason is.

@@ -16,6 +16,10 @@ import { FH_EVIDENCE_DIR } from "./layout.js";
 // Local time (one log per library, read by a person), host as plain word.
 
 export const HOST = hostname();
+// Who made the call, in every log line: FH_CLIENT_NAME (a project's name, when several projects share a
+// library on one machine), else the host name. Read at the first line, after the .env is loaded.
+let client: string | undefined;
+export const clientName = (env: NodeJS.ProcessEnv = process.env): string => (env.FH_CLIENT_NAME ?? "").trim().replace(/\s+/g, "-") || HOST;
 export const LOG_DIR = join(FH_EVIDENCE_DIR, "logs");
 export const LOG_FILE = join(LOG_DIR, "evidence.log");
 
@@ -87,7 +91,7 @@ export function log(tool: string, id: string | null, message: string): void {
   // URLs without "https://" — nearly every URL has it, so it is only bytes; a plain
   // "http://" stays, it is the exception (an old link). The TUI puts https:// back for links.
   const clean = message.replace(/\x1b\[[0-9;]*m/g, "").replace(/\s*\n\s*/g, " | ").replace(/https:\/\//g, "");
-  const line = `${stamp()} ${HOST} ${tool} ${(id ?? "-").replace(/https:\/\//g, "")} ${clean}\n`;
+  const line = `${stamp()} ${(client ??= clientName())} ${tool} ${(id ?? "-").replace(/https:\/\//g, "")} ${clean}\n`;
   try {
     mkdirSync(LOG_DIR, { recursive: true });
     rotateIfLarge(LOG_FILE);

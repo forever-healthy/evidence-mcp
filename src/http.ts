@@ -71,18 +71,49 @@ export async function fetchBytes(url: string, headers: Record<string, string> = 
   throw Object.assign(new Error(last), finalUrl ? { url: finalUrl } : {}, lastBody ? { body: lastBody, contentType: lastType } : {});
 }
 
+// NCBI's E-utilities allow 10 requests a second with an API key, 3 without, per key or IP — for the
+// whole server, whatever runs at once (the evidence map's searches, library adds, batch fetches).
+// Every E-utilities request takes the next free slot: starts at least 1/9 s apart (1/2.5 s without
+// a key), a little under the limit (live 2026-11-21: 10 searches at once, one refused). Other server
+// processes on the same key (the live hosts run several) are not seen: a refusal (HTTP 429) doubles
+// this process's spacing, up to 2 s, and each answer eases it back — processes sharing a key settle
+// below the limit together — and the request waits (growing, with jitter, or NCBI's Retry-After)
+// and tries again, about 30 s in all before it fails.
+export const isNcbi = (url: string): boolean => { try { return new URL(url).hostname === "eutils.ncbi.nlm.nih.gov"; } catch { return false; } };
+let ncbiNext = 0, ncbiSlow = 1;
+const ncbiBase = (env: NodeJS.ProcessEnv) => (env.FH_NCBI_API_KEY?.trim() ? 1000 / 9 : 400);
+export async function ncbiTurn(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const gap = Math.min(2000, ncbiBase(env) * ncbiSlow);
+  const now = Date.now(), at = Math.max(now, ncbiNext);
+  ncbiNext = at + gap;
+  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+}
+export const ncbiRefused = (): void => { ncbiSlow = Math.min(32, ncbiSlow * 2); };
+export const ncbiAnswered = (): void => { ncbiSlow = Math.max(1, ncbiSlow * 0.9); };
+export const ncbiSpacing = (env: NodeJS.ProcessEnv = process.env): number => Math.min(2000, ncbiBase(env) * ncbiSlow);   // tests
+export const ncbiReset = (): void => { ncbiNext = 0; ncbiSlow = 1; };   // tests
+// The wait before try n+1 after a refusal: NCBI's Retry-After if it gives one, else 1.5 s, 3 s, 6 s, … (at most 10 s), with jitter.
+export const ncbiWait = (attempt: number, retryAfter: string | null): number => {
+  const s = Number(retryAfter);
+  return Number.isFinite(s) && s > 0 ? Math.min(30_000, s * 1000) : Math.min(10_000, 1500 * 2 ** attempt) * (0.75 + Math.random() / 2);
+};
+
 export async function fetchText(url: string, headers: Record<string, string> = {}): Promise<string> {
   let last = "unknown error";
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const ncbi = isNcbi(url);
+  for (let attempt = 0; attempt < (ncbi ? 6 : 2); attempt++) {
+    let retryAfter: string | null = null;
     try {
+      if (ncbi) await ncbiTurn();
       const res = await fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS), redirect: "follow" });
-      if (res.ok) return await res.text();
+      if (res.ok) { if (ncbi) ncbiAnswered(); return await res.text(); }
+      if (ncbi && res.status === 429) { ncbiRefused(); retryAfter = res.headers.get("retry-after"); }
       last = res.status < 500 ? httpReason(res.status, await res.text().catch(() => "")) : `HTTP ${res.status}`;
       if (res.status !== 429 && res.status < 500) break;
     } catch (e) {
       last = e instanceof Error && e.name === "TimeoutError" ? "timeout" : e instanceof Error ? e.message : String(e);
     }
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, ncbi ? ncbiWait(attempt, retryAfter) : 1500));
   }
   throw new Error(last);
 }

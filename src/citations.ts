@@ -10,7 +10,7 @@ import { efetchUrl } from "./pubmed.js";
 import { COLUMNS, esummaryUrl, parseEsummary, yearRange, type Row } from "./pubmedsearch.js";
 import { searchCacheDays, searchFile } from "./trials.js";
 
-// fh_pubmed_citing_articles (#75, development only: FH_CITATIONS_ENABLED): the
+// fh_citing_articles (#75): the
 // papers that cite a paper. PubMed has no complete "cited by"; OpenAlex has —
 // compared with Semantic Scholar on six telmisartan papers (2026-11-16), OpenAlex
 // found as many or more for five, and more with a PMID. OpenAlex lists the citing
@@ -37,8 +37,6 @@ export type Sort = "newest" | "cited";
 export type Query = { id: string; types?: string[]; years?: string; sort: Sort; max_results: number };
 export type Result = { source: "openalex+pubmed"; query: Query; total: number; comments_on?: string[]; columns: typeof COLUMNS; rows: Row[]; searched: string };
 export type Outcome = { ok: true; result: Result; cached: boolean } | { ok: false; error: string; input?: true };   // input: the caller's mistake, logged as error; else failed
-
-export const citationsEnabled = (env: NodeJS.ProcessEnv = process.env): boolean => /^(true|1|yes|on)$/i.test(env.FH_CITATIONS_ENABLED?.trim() ?? "");
 
 // "meta-analysis", "Meta-Analysis", "RCT": one spelling to compare
 const ALIAS: Record<string, string> = { rct: "randomized controlled trial", "systematic-review": "systematic review" };

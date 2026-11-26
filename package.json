@@ -1,6 +1,6 @@
 {
   "name": "evidence-mcp",
-  "version": "1.0.17",
+  "version": "1.1.0",
   "description": "Power tools for AI agents to improve and speed up medical literature research",
   "type": "module",
   "bin": {
@@ -11,16 +11,17 @@
   ],
   "scripts": {
     "browser": "playwright-core install chromium",
-    "build": "tsup src/index.ts --format esm --target node18 --clean --no-splitting",
+    "build": "node scripts/gen-prompts.mjs && tsup src/index.ts --format esm --target node18 --clean --no-splitting",
     "dev": "tsx src/index.ts",
     "prepublishOnly": "npm run build",
-    "test": "tsx --test test/*.test.ts",
+    "test": "node scripts/gen-prompts.mjs && FH_EVIDENCE_DIR=$(mktemp -d) tsx --test test/*.test.ts",
     "tui": "bash tui/run.sh"
   },
   "engines": {
     "node": ">=20.18.1"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
     "@joplin/turndown-plugin-gfm": "^1.0.68",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "fast-xml-parser": "^5.11.2",

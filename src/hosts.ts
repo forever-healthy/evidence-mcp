@@ -8,23 +8,56 @@
 //         ("skipped <stage>: host down …"); then it is asked again
 // The same check is the health fh_info, the TUI and /status show. Free: no
 // request reaches a site.
-import { connect } from "node:net";
+//
+// The address: a name can resolve to many (this VM's own name: 30 — link-local IPv6
+// first, Docker bridges, the LAN, the tailnet). A link-local address comes back
+// without its zone and cannot be dialled (AI4L-dev 2026-11-20: every Chrome connect
+// "ECONNREFUSED fe80::…:9001" while a connect by name was up). So the addresses are
+// tried in turn, link-local left out, and the first that accepts is the host's
+// address — the one the Chrome stage dials (src/browser.ts cdpUrl), so the health
+// check tests what a download uses.
+import { lookup } from "node:dns/promises";
+import { connect, isIP } from "node:net";
 
 const UP_MS = 60_000, DOWN_MS = 5 * 60_000, PROBE_MS = 3000;
-export type HostState = { up: boolean; ms: number; at: number; error: string | null };
+export type HostState = { up: boolean; ms: number; at: number; error: string | null; address?: string };
 const seen = new Map<string, HostState>();
 const key = (host: string, port: number) => `${host}:${port}`;
 
-// One TCP connect, timed.
-export function probe(host: string, port: number, timeoutMs = PROBE_MS): Promise<HostState> {
-  const t0 = Date.now();
+// One TCP connect to one address, timed.
+function connectOnce(address: string, port: number, timeoutMs: number): Promise<string | null> {
   return new Promise((resolve) => {
-    const s = connect({ host, port });
-    const done = (error: string | null) => { s.destroy(); resolve({ up: !error, ms: Date.now() - t0, at: Date.now(), error }); };
+    const s = connect({ host: address, port });
+    const done = (error: string | null) => { s.destroy(); resolve(error); };
     s.setTimeout(timeoutMs, () => done(`no answer within ${timeoutMs / 1000} s`));
     s.once("connect", () => done(null));
     s.once("error", (e: NodeJS.ErrnoException) => done(e.code ?? e.message));
   });
+}
+
+// The addresses to try: an IP or localhost as is; a name's addresses in resolver order, link-local out.
+export async function candidates(host: string, lookupImpl = lookup): Promise<string[]> {
+  if (host === "localhost" || isIP(host)) return [host];
+  const all = await lookupImpl(host, { all: true, order: "verbatim" });
+  const usable = all.map((a) => a.address).filter((a) => !/^fe[89ab]/i.test(a));
+  return usable.length ? usable : [host];
+}
+
+// The host's state: its addresses tried in turn until one accepts, timed as a whole.
+export async function probe(host: string, port: number, timeoutMs = PROBE_MS): Promise<HostState> {
+  const t0 = Date.now();
+  let list: string[];
+  try { list = await candidates(host); }
+  catch (e) { return { up: false, ms: Date.now() - t0, at: Date.now(), error: (e as NodeJS.ErrnoException).code ?? String(e) }; }
+  let first: string | null = null;
+  for (const address of list) {
+    const left = timeoutMs - (Date.now() - t0);
+    if (left <= 0) break;
+    const error = await connectOnce(address, port, left);
+    if (!error) return { up: true, ms: Date.now() - t0, at: Date.now(), error: null, address };
+    first ??= error;
+  }
+  return { up: false, ms: Date.now() - t0, at: Date.now(), error: first ?? `no answer within ${timeoutMs / 1000} s` };
 }
 
 // The host's state, from memory while it is fresh, else asked; a host newly

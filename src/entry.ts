@@ -39,6 +39,11 @@ export type Meta = {
   converted_by: string;
   pubmed_checked: string;        // date the PubMed record was last read (ingest or refresh)
   attempts: string[];            // failed tiers, "<tier> (<reason>)"
+  // Study characteristics, read from the abstract by a model (src/characteristics.ts); absent until one did.
+  design?: string | null;
+  participants?: number | null;
+  population?: string | null;    // humans | animals | in vitro
+  characteristics_by?: string | null;   // the model that read them
 };
 
 export type Status = {
@@ -66,6 +71,11 @@ export type Status = {
   comment: string | null; // why not citable; or, when citable, a notice to be aware of
   has_abstract: boolean | null;
   level: Level | "title" | "missing" | null;   // "title": no full text and no abstract text
+  design?: string;               // study characteristics, read from the abstract by a model: design, participants, population
+  participants?: number | null;
+  population?: string | null;
+  characteristics_by?: string | null;
+  fulltext?: "not tried";        // a paper stored from PubMed alone (a batch, the evidence map): no full-text source tried yet
   version: string | null;
   retrieved_by: string | null;
   retrieved_date: string | null;
@@ -176,6 +186,7 @@ export function renderMeta(m: Meta): string {
     ["converted_by", m.converted_by],
     ["pubmed_checked", m.pubmed_checked],
     ["attempts", m.attempts.join(", ")],
+    ...(m.design ? [["design", JSON.stringify(m.design)], ["participants", m.participants ? String(m.participants) : ""], ["population", m.population ?? ""], ["characteristics_by", m.characteristics_by ?? ""]] as [string, string][] : []),
   ];
   return "---\n" + lines.map(([k, v]) => (v === "" ? `${k}:` : `${k}: ${v}`)).join("\n") + "\n---\n";
 }
@@ -274,6 +285,7 @@ export function readMeta(p: EntryPaths): Meta {
     retrieved_by: fm.retrieved_by ?? "", retrieved_date: fm.retrieved_date ?? "",
     converted_by: fm.converted_by ?? "", pubmed_checked: legacy ? (fm.retrieved_date ?? "") : fm.pubmed_checked,
     attempts: splitAttempts(fm.attempts),
+    ...(fm.design ? { design: fm.design.startsWith('"') ? (() => { try { return JSON.parse(fm.design) as string; } catch { return fm.design; } })() : fm.design, participants: Number(fm.participants) || null, population: opt(fm.population), characteristics_by: opt(fm.characteristics_by) } : {}),
   };
 }
 
@@ -354,9 +366,16 @@ export function statusFromMeta(p: EntryPaths, m: Meta, base: Status): Status {
     has_abstract: m.has_abstract, level: m.level === "abstract" && !m.has_abstract ? "title" : m.level, version: m.version,
     retrieved_by: m.retrieved_by || null, retrieved_date: m.retrieved_date || null, pubmed_checked: m.pubmed_checked || null,
     attempts: m.attempts, files: m.files,
+    ...(fulltextNeverTried(m) ? { fulltext: "not tried" as const } : {}),
+    ...(m.design ? { design: m.design, participants: m.participants ?? null, population: m.population ?? null, characteristics_by: m.characteristics_by ?? null } : {}),
     glyphs_unresolved: full === null ? null : countUnresolved(full),
   };
 }
+
+// A paper below full text that no full-text source was ever tried for — stored by
+// fh_pubmed_fetch_articles or the evidence map, which read PubMed only. A read
+// or a verification runs the full-text cascade first, as for a missing paper.
+export const fulltextNeverTried = (m: Pick<Meta, "level" | "attempts">): boolean => m.level === "abstract" && m.attempts.length === 0;
 
 export function readStatus(p: EntryPaths, base: Status): Status {
   return statusFromMeta(p, readMeta(p), base);

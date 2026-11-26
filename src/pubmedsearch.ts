@@ -38,14 +38,15 @@ export function yearRange(years: string | undefined): { min: string; max: string
   return { min, max };
 }
 
-export function normalizeQuery(q: { query?: string; sort?: string; years?: string; max_results?: number }): Query | { error: string } {
+// cap: the most rows a search may ask for — MAX_RESULTS for the tool; the evidence map asks for more.
+export function normalizeQuery(q: { query?: string; sort?: string; years?: string; max_results?: number }, cap = MAX_RESULTS): Query | { error: string } {
   const query = (q.query ?? "").replace(/\s+/g, " ").trim();
   if (!query) return { error: "empty query" };
   const sort = (q.sort ?? "relevance") as Sort;
   if (!["relevance", "newest"].includes(sort)) return { error: `sort must be relevance or newest, not "${String(q.sort)}"` };
   const yr = yearRange(q.years);
   if (yr && "error" in yr) return yr;
-  const out: Query = { query, sort, max_results: Math.min(MAX_RESULTS, Math.max(1, Math.floor(q.max_results ?? DEFAULT_RESULTS))) };
+  const out: Query = { query, sort, max_results: Math.min(cap, Math.max(1, Math.floor(q.max_results ?? DEFAULT_RESULTS))) };
   if (yr) out.years = `${yr.min === "1000" ? "" : yr.min}-${yr.max}`;
   return out;
 }
@@ -98,8 +99,8 @@ export type Fetch = (url: string) => Promise<string>;
 const live: Fetch = (url) => fetchText(url, { "User-Agent": "evidence-mcp", Accept: "application/json" });
 export type Outcome = { ok: true; result: Result; cached: boolean } | { ok: false; error: string; input?: true };   // input: the caller's mistake, logged as error; else failed
 
-export async function searchArticles(raw: { query?: string; sort?: string; years?: string; max_results?: number }, libraryDir = FH_EVIDENCE_DIR, fetchImpl: Fetch = live): Promise<Outcome> {
-  const q = normalizeQuery(raw);
+export async function searchArticles(raw: { query?: string; sort?: string; years?: string; max_results?: number }, libraryDir = FH_EVIDENCE_DIR, fetchImpl: Fetch = live, cap = MAX_RESULTS): Promise<Outcome> {
+  const q = normalizeQuery(raw, cap);
   if ("error" in q) return { ok: false, error: q.error, input: true };
   const file = searchFile(libraryDir, searchKey(q));
   if (existsSync(file)) {

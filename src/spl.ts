@@ -1,5 +1,6 @@
 import { XMLParser } from "fast-xml-parser";
 import { fetchText, LIBRARY_UA } from "./http.js";
+import { cellPipes } from "./text.js";
 
 // DailyMed drug labels (FDA Structured Product Labeling, HL7 v3) → Markdown.
 // One label per set ID; the set ID is the fixed identifier of a product's
@@ -53,7 +54,7 @@ function inline(nodes: N[]): string {
 // Head rows first, body rows, and the footer (footnotes in SPL tables, which
 // may precede the body in the XML) as lines after the table.
 function table(n: N): string {
-  const row = (x: N) => kids(x).filter((c: N) => ["td", "th"].includes(tagOf(c))).map((c: N) => squash(inline(kids(c))).replace(/\|/g, "\\|"));
+  const row = (x: N) => kids(x).filter((c: N) => ["td", "th"].includes(tagOf(c))).map((c: N) => cellPipes(squash(inline(kids(c)))));
   const collect = (nodes: N[], into: string[][]) => { for (const x of nodes) { if ("#text" in x) continue; if (tagOf(x) === "tr") into.push(row(x)); else if (!["thead", "tfoot"].includes(tagOf(x))) collect(kids(x), into); } };
   const head: string[][] = [], body: string[][] = [], foot: string[][] = [];
   for (const x of kids(n)) { const t = tagOf(x); if (t === "thead") collect(kids(x), head); else if (t === "tfoot") collect(kids(x), foot); else if (t === "tr") body.push(row(x)); else if (!("#text" in x) && t !== "caption") collect(kids(x), body); }

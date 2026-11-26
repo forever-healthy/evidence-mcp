@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import { cellPipes } from "./text.js";
 
 // JATS (PMC full text XML) → Markdown. Order-preserving parse so that mixed
 // content (text with <italic>, <xref>, … inside a paragraph) keeps its word
@@ -83,7 +84,7 @@ function plainText(nodes: N[]): string {
 }
 
 const squash = (s: string) => s.replace(/\s+/g, " ").trim();
-const cell = (s: string) => squash(s).replace(/\|/g, "\\|");
+const cell = (s: string) => cellPipes(squash(s));
 
 function renderTable(table: N): string {
   const rows: string[][] = [];

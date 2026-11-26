@@ -1,4 +1,5 @@
 import { fetchText, LIBRARY_UA } from "./http.js";
+import { cellPipes } from "./text.js";
 
 // ClinicalTrials.gov records (API v2, JSON, no key) → Markdown. One entry per
 // NCT ID, always the current record; the last-update-posted date is its
@@ -31,7 +32,7 @@ const PHASE: Record<string, string> = { EARLY_PHASE1: "Early Phase 1", PHASE1: "
 export const words = (v: unknown): string => { const s = String(v ?? ""); if (!s) return ""; if (STATUS[s]) return STATUS[s]; if (PHASE[s]) return PHASE[s]; const w = s.toLowerCase().replace(/_/g, " "); return w.charAt(0).toUpperCase() + w.slice(1); };
 const dated = (d: J): string => (d?.date ? `${d.date}${d.type ? ` (${String(d.type).toLowerCase()})` : ""}` : "");
 const list = (a: J): J[] => (Array.isArray(a) ? a : []);
-const row = (cells: string[]) => `| ${cells.map((c) => c.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim()).join(" | ")} |`;
+const row = (cells: string[]) => `| ${cells.map((c) => cellPipes(c).replace(/\s+/g, " ").trim()).join(" | ")} |`;
 const table = (head: string[], rows: string[][]): string => rows.length ? [row(head), `| ${head.map(() => "---").join(" | ")} |`, ...rows.map(row)].join("\n") : "";
 const para = (s: unknown): string => String(s ?? "").replace(/\r/g, "").trim();
 

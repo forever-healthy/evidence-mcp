@@ -11,7 +11,7 @@ import { PROVIDER_NAMES, providerByName, providerFor, providerForKey, type Provi
 //
 // Sections, for development (not in the public docs): FH_VERIFY_<PROVIDER>_URL,
 // _MODEL, _API_KEY, one set per provider, so several keys sit in one .env and a
-// switch is one word (stuff/bench compares every filled section). A section's
+// switch is one word (stuff/verify compares every filled section). A section's
 // field wins over the plain variable; the plain one fills what it leaves empty.
 
 export type VerifyConfig = {
