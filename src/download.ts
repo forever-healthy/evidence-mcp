@@ -237,7 +237,9 @@ function describe(reason: string, format: TierHit["format"], md: string): string
 // A document's Markdown source as the text to read: without its front matter, its comments (notes the page does
 // not show), its own title line (ours stands above it) and empty HTML shells left for the site's build.
 export function sourceMarkdown(text: string, ownTitle = false): string {
-  const shown = text.replace(/^\uFEFF/, "").replace(/^---\n[\s\S]*?\n---\n/, "").replace(/<!--[\s\S]*?-->/g, "").replace(/^[ \t]*<(\w+)\b[^>]*>\s*<\/\1>[ \t]*$/gm, "");
+  let body = text.replace(/^\uFEFF/, "").replace(/^---\n[\s\S]*?\n---\n/, "");
+  for (let prev = ""; prev !== body;) { prev = body; body = body.replace(/<!--[\s\S]*?-->/g, ""); }   // until none is left: removing one comment can join the halves of another
+  const shown = body.replace(/^[ \t]*<(\w+)\b[^>]*>\s*<\/\1>[ \t]*$/gm, "");
   return (ownTitle ? shown : shown.replace(/^\s*# [^\n]*\n/, "")).replace(/\n{3,}/g, "\n\n").trim() + "\n";
 }
 

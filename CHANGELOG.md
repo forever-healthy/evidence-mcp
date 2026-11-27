@@ -1,5 +1,10 @@
 # Forever Healthy Evidence MCP — Change Log
 
+### v1.1.11 — 2026-11-27
+
+* **Maintenance:** a code-scanning finding in the new Markdown handling fixed; no change in behaviour.
+
+
 ### v1.1.10 — 2026-11-27
 
 * **Full text for DataCite DOIs:** a report or review whose DOI is not a journal article's now gets its full text from the page the DOI leads to (new source `doi-link` in `FH_SOURCES`).
