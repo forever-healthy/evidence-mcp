@@ -1,5 +1,11 @@
 # Forever Healthy Evidence MCP — Change Log
 
+### v1.1.12 — 2026-11-27
+
+* **Clearer tool descriptions:** a read that first downloads a missing document says so plainly; `fh_library_add` says when to call it and what is not an error.
+* **Lock file in the repository:** `package-lock.json` ships with the source, so the exact dependencies are visible.
+
+
 ### v1.1.11 — 2026-11-27
 
 * **Maintenance:** a code-scanning finding in the new Markdown handling fixed; no change in behaviour.
