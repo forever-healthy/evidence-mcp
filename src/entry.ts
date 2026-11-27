@@ -132,6 +132,16 @@ export function readHeadLine(p: EntryPaths): string {
   } catch { return ""; }
 }
 
+// The stored abstract's text (what follows "## Abstract", up to the next heading), null when the entry has none.
+export function readAbstractText(p: EntryPaths): string | null {
+  try {
+    const md = readFileSync(p.md, "utf8");
+    const at = md.indexOf("\n## Abstract");
+    if (at < 0 || md.includes("_No abstract available._")) return null;
+    return md.slice(at + 12).split(/\n## /)[0].trim() || null;
+  } catch { return null; }
+}
+
 // --- meta.md ----------------------------------------------------------------
 
 export function metaFromRecord(r: PubmedRecord, files: string[], converter: string): Meta {
@@ -488,7 +498,7 @@ export function syncCorrectedBlock(p: EntryPaths): void {
 }
 
 export function applyFulltext(p: EntryPaths, m: Meta, hit: TierHit, converter: string): Meta {
-  const raw = p.fulltextRaw(hit.format);
+  const raw = p.fulltextRaw(hit.format === "md" ? "source.md" : hit.format);   // -fulltext.md is the checked Markdown itself
   writeAtomic(raw, hit.raw);
   writeAtomic(p.fulltextMd, hit.md);
   syncCorrectedBlock(p);
@@ -564,6 +574,12 @@ export function writeStudyEntry(p: EntryPaths, s: StudyDoc, json: string, conver
 // meta with pmid "" — the full-text cascade then runs as for any paper.
 // retrieved_by names the source of what the level holds: the abstract's
 // source ("crossref" or "openalex"), or "crossref" for the title alone.
+const cslFile = (p: EntryPaths) => p.fulltextRaw("json").replace(/-fulltext\.json$/, "-csl.json");
+// Where the DOI of an entry leads, when its record came from doi.org (another registry than Crossref): the URL in
+// the stored CSL JSON. null for a PubMed or Crossref entry.
+export function readDoiLink(p: EntryPaths): string | null {
+  try { const u = (JSON.parse(readFileSync(cslFile(p), "utf8")) as { URL?: unknown }).URL; return typeof u === "string" && /^https?:\/\/\S+$/i.test(u) && !/^https?:\/\/(dx\.)?doi\.org\//i.test(u) ? u : null; } catch { return null; }
+}
 export function writeDoiEntry(p: EntryPaths, r: PubmedRecord, json: string, converter: string, abstractFrom = "crossref", recordFrom = "crossref"): Meta {
   mkdirSync(p.entryDir, { recursive: true });
   // The record as its source gave it: Crossref's JSON, or doi.org's CSL JSON for another registry.

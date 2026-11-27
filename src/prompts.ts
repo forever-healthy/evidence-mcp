@@ -31,7 +31,8 @@ export const builtinPrompt = (kind: PromptKind): string => BUILTIN[kind];
 // a header (a title and its purpose, through the first line that is only ---), HTML comments
 // (<!-- … -->). The model gets the naked prompt; a file with none of these is used whole.
 export function promptBody(text: string): string {
-  let t = text.replace(/<!--[\s\S]*?-->[ \t]*\r?\n?/g, "");
+  let t = text;
+  for (let prev = ""; prev !== t;) { prev = t; t = t.replace(/<!--[\s\S]*?-->[ \t]*\r?\n?/g, ""); }   // until none is left: removing one comment can join the halves of another
   const fm = /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/.exec(t);
   if (fm) t = t.slice(fm[0].length);
   else { const m = /^---[ \t]*\r?\n/m.exec(t); if (m) t = t.slice(m.index + m[0].length); }

@@ -1,5 +1,16 @@
 # Forever Healthy Evidence MCP — Change Log
 
+### v1.1.10 — 2026-11-27
+
+* **Full text for DataCite DOIs:** a report or review whose DOI is not a journal article's now gets its full text from the page the DOI leads to (new source `doi-link` in `FH_SOURCES`).
+* **Wrong full texts are refused:** a download that names the paper but is another document — its supplementary appendix alone, a commentary on it — is no longer stored as its full text; the search goes on to the next source.
+* **Misspelled tool arguments are reported:** a call with an argument the tool does not have is refused and names it, instead of ignoring it.
+* **Tools declare what they do:** every tool says whether it only reads, asks an outside service or changes something, so a client can decide what to allow without asking.
+* **No paid health checks:** the TUI reads the state of the search providers and unlockers from the log, and `fh_info` reuses a recent check for 15 minutes — neither spends credit just to see that a provider answers.
+* **Problems on their own line in the TUI:** what is wrong stands above the server line, which keeps its version and port in view.
+* **Security updates:** dependencies at their patched versions.
+
+
 ### v1.1.0 — 2026-11-26
 
 * **Complete cited-by lists:** `fh_citing_articles` lists the articles that cite a paper — follow-up trials, later meta-analyses, guidelines and comments — filtered by type and year. Complete lists from OpenAlex, where PubMed's own cover only PubMed Central.

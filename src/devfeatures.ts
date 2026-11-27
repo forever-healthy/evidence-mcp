@@ -1,3 +1,4 @@
+import { dataciteEnabled } from "./datacite.js";
 import { evidEnabled } from "./evid.js";
 import { evidenceMapEnabled } from "./evidencemap.js";
 
@@ -8,5 +9,6 @@ export function devFeatures(env: NodeJS.ProcessEnv = process.env): string[] {
   const out: string[] = [];
   if (evidEnabled(env)) out.push("FH_EVID_ENABLED");
   if (evidenceMapEnabled(env)) out.push("FH_EVMAP_ENABLED");
+  if (dataciteEnabled(env)) out.push("FH_DATACITE_ENABLED");
   return out;
 }

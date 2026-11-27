@@ -15,6 +15,7 @@ import { migrateWalls } from "./walls.js";
 import { startStats } from "./stats.js";
 import { buildLabel, INSTRUCTIONS, localBuild, pkg, registerTools } from "./tools.js";
 import { devFeatures } from "./devfeatures.js";
+import { dataciteProblems } from "./datacite.js";
 
 const server = new McpServer(
   { name: pkg.name, version: pkg.version },
@@ -28,7 +29,7 @@ log("startup", null, buildLabel);   // the package and its version, or "local so
 for (const f of devFeatures()) log("startup", null, f);   // before the problems: a "startup" line clears the TUI's open startup alerts
 // Exiting while downloads run: each open request gets its "abandoned" line (src/race.ts).
 process.on("exit", abandonAll);
-for (const problem of [...resolveTiers().problems, ...verifyProblems(), ...(evidenceMapEnabled() ? evmapModels().problems : [])]) log("startup", null, `!! ${problem}`);   // a misconfigured source list or decision model, said once, where the TUI shows it
+for (const problem of [...resolveTiers().problems, ...verifyProblems(), ...(evidenceMapEnabled() ? evmapModels().problems : []), ...dataciteProblems()]) log("startup", null, `!! ${problem}`);   // a misconfigured source list or decision model, said once, where the TUI shows it
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

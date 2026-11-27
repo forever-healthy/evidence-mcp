@@ -101,3 +101,43 @@ export function checkFulltext(md: string, title: string, titleSource?: string, d
   if (!hasMethodsAndResults(md)) return { ok: false, reason: "no methods/results" };
   return { ok: true };
 }
+
+// --- Is it this paper, or another document under its name? (#7) --------------
+// A paper's full text holds its own abstract, nearly word for word. Counted on live (2026-11-26, 5,164 full
+// texts): 95% hold every sentence of it, and 8 were not the paper at all — a commentary on it, a letters page,
+// another trial's report, the full guideline for its synopsis, the supplementary appendix alone, unreadable
+// text. The share alone cannot decide: of the 39 texts holding under half the abstract, 31 were the right paper
+// (preprints and author manuscripts whose abstract was rewritten, letters whose PubMed abstract is not in the
+// article). So a text is refused only when no sentence of the abstract is in it AND it either calls itself
+// supplementary material at its start or does not carry the title there either.
+const tokens = (s: string) => greek(s).toLowerCase().match(/[a-z0-9]+/g) ?? [];
+const runs = (w: string[], n: number) => { const g = new Set<string>(); for (let i = 0; i + n <= w.length; i++) g.add(w.slice(i, i + n).join(" ")); return g; };
+const shareIn = (part: Set<string>, whole: Set<string>) => { let n = 0; for (const x of part) if (whole.has(x)) n++; return part.size ? n / part.size : 0; };
+
+// The abstract's sentences of 8+ words, and how many the text holds (half of a sentence's four-word runs:
+// line breaks, hyphenation and lost symbols of a PDF do not hide it).
+export function abstractInText(md: string, abstract: string): { sentences: number; found: number } {
+  const sents = abstract.replace(/\*\*[^*\n]{1,40}\*\*:?/g, " ").split(/(?<=[.!?])\s+|\n+/).map(tokens).filter((w) => w.length >= 8);
+  if (!sents.length) return { sentences: 0, found: 0 };
+  const text = runs(tokens(md), 4);
+  return { sentences: sents.length, found: sents.filter((w) => shareIn(runs(w, 4), text) >= 0.5).length };
+}
+
+// The share of the title's three-word runs among the text's first 3000 words: a preprint under an earlier
+// title still shares most of them, a document that only cites the paper has the title at its end.
+export function titleAtStart(md: string, title: string): number {
+  const t = runs(tokens(title), 3);
+  return t.size ? shareIn(t, runs(tokens(md).slice(0, 3000), 3)) : 1;
+}
+
+const SUPPLEMENT = /\bsupplement(?:ary|al)\s+(?:appendix|materials?|information|data|files?)\b/i;
+
+// null: nothing says it is another document. `md` without the "# <title>" heading and head line the converters
+// prepend. An abstract of fewer than three sentences decides nothing.
+export function anotherDocument(md: string, title: string, abstract: string | null | undefined): string | null {
+  if (!abstract) return null;
+  const a = abstractInText(md, abstract);
+  if (a.sentences < 3 || a.found > 0) return null;
+  if (SUPPLEMENT.test(md.split(/\s+/).slice(0, 300).join(" "))) return "supplementary material";
+  return titleAtStart(md, title) < 0.5 ? "another document" : null;
+}

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { z } from "zod";
-import { applyFulltext, copyEntry, daysSince, emptyStatus, entryExists, fulltextNeverTried, readHeadLine, readMeta, readStatus, recordAttempts, refreshRecord, statusFromMeta, today, writeEntry, writeMeta, type Meta, type Status } from "./entry.js";
+import { applyFulltext, copyEntry, daysSince, emptyStatus, entryExists, fulltextNeverTried, readAbstractText, readHeadLine, readMeta, readStatus, recordAttempts, refreshRecord, statusFromMeta, today, writeEntry, writeMeta, type Meta, type Status } from "./entry.js";
 import { settings } from "./config.js";
 import { attemptLabel, fulltextCascade } from "./cascade.js";
 import type { EntryPaths } from "./layout.js";
@@ -13,16 +13,17 @@ import { assembleDeclarations, findSections, outline, readSection, search, type 
 import { HOST, LOG_FILE, log } from "./log.js";
 import { verifyConfig } from "./verify/config.js";
 import { unlockerHealth } from "./unlock.js";
+import { recentHealth } from "./health.js";
 import { probe } from "./hosts.js";
 import { decider } from "./verify/decider.js";
 import { fetchSpl, parseSpl } from "./spl.js";
 import { fetchStudy, parseStudy } from "./ctgov.js";
 import { fetchCrossref, fetchCsl, openAlexAbstract, parseCrossref, parseCsl, pmidForDoi } from "./doi.js";
-import { renderAbstractMd, writeDoiEntry, writeLabelEntry, writeStudyEntry } from "./entry.js";
+import { readDoiLink, renderAbstractMd, writeDoiEntry, writeLabelEntry, writeStudyEntry } from "./entry.js";
 import { fetchAnswer, libraryFetch, libraryIdForUrl, logId } from "./urlfetch.js";
 import { verifyCached } from "./verify/cache.js";
 import { bump, currentStats } from "./stats.js";
-import { compact, leanJson, readAnswer, searchAnswer, statusAnswer, verdictAnswer } from "./json.js";
+import { compact, lean, leanJson, readAnswer, searchAnswer, statusAnswer, verdictAnswer } from "./json.js";
 import { MAX_RESULTS as MAX_TRIALS, searchCacheDays, searchTrials } from "./trials.js";
 import { MAX_RESULTS as MAX_PAPERS, searchArticles } from "./pubmedsearch.js";
 import { MAX_RESULTS as MAX_LABELS, searchLabels } from "./dailymedsearch.js";
@@ -38,6 +39,7 @@ import { jobAnswer, jobRunning, readJob, startJob, waitSecs } from "./mapjob.js"
 import { getGaps, reportGap } from "./gaps.js";
 import { evidenceMapEnabled, getQueryPerformance } from "./evidencemap.js";
 import { discoverMap, liveDeps } from "./discovery.js";
+import { createDoi, exampleDoi, dataciteConfig, dataciteInfo, deleteDoi, getDoi, hideDoi, LIST_MAX as MAX_DOIS, listDois, liveDeps as dataciteDeps, publishDoi, suffixFormat, updateDoi } from "./datacite.js";
 import { createEvid, DEFAULT_MAX_CHARS as EVID_MAX_CHARS, evidEnabled, findEvids, getObject, listObjects, openEvid, putObject } from "./evid.js";
 
 // Read our own name/version from the package.json shipped alongside dist/,
@@ -86,7 +88,7 @@ Tools
 - Search: fh_pubmed_search_articles, fh_pubmed_fetch_articles, fh_citing_articles, fh_clinicaltrials_search_studies, fh_dailymed_search_labels${webSearchConfigured() ? ", fh_web_search (instead of the built-in web search)" : ""}.
 - Trials: fh_clinicaltrials_get_study_record, fh_clinicaltrials_get_study_results.
 - Web: fh_fetch_url, for every URL that is not an article, label or trial record.
-${evidEnabled() ? "- EVID: fh_evid_create, fh_evid_find, fh_evid_list_objects, fh_evid_put, fh_evid_get — a store that outlives the session.\n" : ""}${evidenceMapEnabled() ? `- Evidence map — a guide to the articles a review of a topic should not overlook (not complete: your own searches and your review's rules still decide), by section of the review (${mapTables().sections.map((x) => x.name).join(", ")}): fh_evmap_create_map (topic in, EVID out; takes minutes), fh_evmap_get_map (the state, then the map), fh_evmap_get_info (its topic, state and counts), fh_evmap_report_gap (before adding an article the map did not give: what it has instead). Not needed to use a map: fh_evmap_get_query_performance, fh_evmap_get_gaps.\n` : ""}- fh_info: this server's version and the library.
+${dataciteInfo() ? `- DataCite — DOIs for work you publish (reviews, reports, datasets)${dataciteInfo()!.system === "test" ? ", here on its test system" : ""}: fh_datacite_create_doi (a draft), fh_datacite_update_doi, fh_datacite_publish_doi (public; never deleted after), fh_datacite_hide_doi (public → out of DataCite's search), fh_datacite_delete_doi (drafts only), fh_datacite_list_dois (the account's DOIs), fh_datacite_get_doi (one record).\n` : ""}${evidEnabled() ? "- EVID: fh_evid_create, fh_evid_find, fh_evid_list_objects, fh_evid_put, fh_evid_get — a store that outlives the session.\n" : ""}${evidenceMapEnabled() ? `- Evidence map — a guide to the articles a review of a topic should not overlook (not complete: your own searches and your review's rules still decide), by section of the review (${mapTables().sections.map((x) => x.name).join(", ")}): fh_evmap_create_map (topic in, EVID out; takes minutes), fh_evmap_get_map (the state, then the map), fh_evmap_get_info (its topic, state and counts), fh_evmap_report_gap (before adding an article the map did not give: what it has instead). Not needed to use a map: fh_evmap_get_query_performance, fh_evmap_get_gaps.\n` : ""}- fh_info: this server's version and the library.
 
 Rules
 - fh_library_read and fh_verify_claim store a missing record themselves (added: true); no fh_library_add first.
@@ -133,7 +135,57 @@ const modelFailure = (error: string, cfg: { model: string } | null) => error.sta
 const TYPE_ORDER = ["pmid", "doi", "nct", "dailymed", "url"];
 const typeOrder = (types: string[]): string[] => [...TYPE_ORDER.filter((t) => types.includes(t)), ...types.filter((t) => !TYPE_ORDER.includes(t)).sort()];
 
+// What each tool does to the world, as MCP lets a tool declare it. reads: the tool's purpose is to read or to judge;
+// what it stores on the way (a cached answer, a missing entry, a fetched page) is the library filling itself. Not
+// reads: the tools whose purpose is to write (an add, a create, a put, a report). outside: it asks a service on the network. No library tool deletes or overwrites: an add
+// or a put keeps what was there. destroys: the two DataCite tools that do — an update replaces a record's fields, a delete removes a draft. again: the same call a second time changes nothing more.
+const note = (reads: boolean, outside: boolean, again = true, destroys = false) => ({ readOnlyHint: reads, destructiveHint: destroys, idempotentHint: again, openWorldHint: outside });
+export const TOOL_ANNOTATIONS: Record<string, ReturnType<typeof note>> = {
+  fh_info: note(true, true),
+  fh_library_status: note(true, false),
+  fh_library_add: note(false, true),
+  fh_library_read: note(true, true),
+  fh_verify_claim: note(true, true),
+  fh_fetch_url: note(true, true),
+  fh_pubmed_fetch_articles: note(true, true),
+  fh_pubmed_search_articles: note(true, true),
+  fh_citing_articles: note(true, true),
+  fh_clinicaltrials_search_studies: note(true, true),
+  fh_clinicaltrials_get_study_record: note(true, true),
+  fh_clinicaltrials_get_study_results: note(true, true),
+  fh_dailymed_search_labels: note(true, true),
+  fh_web_search: note(true, true),
+  fh_evid_create: note(false, false),
+  fh_evid_find: note(true, false),
+  fh_evid_list_objects: note(true, false),
+  fh_evid_put: note(false, false, false),        // every put is a new version
+  fh_evid_get: note(true, false),
+  fh_evmap_create_map: note(false, true, false), // a topic makes a new map each time
+  fh_evmap_get_info: note(true, false),
+  fh_evmap_get_query_performance: note(true, false),
+  fh_evmap_report_gap: note(false, false, false),
+  fh_evmap_get_gaps: note(true, false),
+  fh_evmap_get_map: note(true, false),
+  fh_datacite_get_doi: note(true, true),
+  fh_datacite_list_dois: note(true, true),
+  fh_datacite_create_doi: note(false, true, false),          // every create is a new DOI
+  fh_datacite_update_doi: note(false, true, true, true),     // replaces the fields given
+  fh_datacite_publish_doi: note(false, true),                // removes nothing; a public DOI stays for good
+  fh_datacite_hide_doi: note(false, true),                   // out of the search, not deleted; publish brings it back
+  fh_datacite_delete_doi: note(false, true, true, true),
+};
+
 export function registerTools(server: McpServer): void {
+  // Every tool's arguments are a closed set: an argument the tool does not have is refused by name, not dropped
+  // in silence, and the definition an agent sees says so (additionalProperties: false — zod 4 leaves it out otherwise).
+  const plain = server.tool.bind(server) as (...a: unknown[]) => { inputSchema?: { _zod?: { def?: { shape?: z.ZodRawShape } } } | z.ZodType };
+  (server as { tool: unknown }).tool = (...a: unknown[]) => {
+    const t = plain(...a);
+    const shape = (t?.inputSchema as { _zod?: { def?: { shape?: z.ZodRawShape } } } | undefined)?._zod?.def?.shape;   // the SDK made an open object of the tool's fields
+    if (t && shape) t.inputSchema = z.strictObject(shape);
+    if (t) (t as { annotations?: unknown }).annotations = TOOL_ANNOTATIONS[a[0] as string];
+    return t;
+  };
   const SECTIONS = mapTables().sections.map((x) => x.name).join(", ");   // the map's sections, as the discovery prompt in force sets them
   // IDs are "type:value" (pmid:30955454, doi:10.…, pmc:PMC…, nct:NCT…); bare
   // digits count as pmid. One ID per call — no batches (the GitHub issues for what is not).
@@ -144,7 +196,7 @@ export function registerTools(server: McpServer): void {
   // Runs the full-text cascade on an abstract-level entry and writes the
   // result: files + upgraded meta on a hit, new attempts on misses.
   async function completeFulltext(paths: EntryPaths, meta: Meta, requested: string): Promise<{ meta: Meta; ran: boolean }> {
-    const article = { title: meta.title, pmid: meta.pmid, pmcid: meta.pmcid, doi: meta.doi, headLine: readHeadLine(paths) };
+    const article = { title: meta.title, pmid: meta.pmid, pmcid: meta.pmcid, doi: meta.doi, headLine: readHeadLine(paths), abstract: readAbstractText(paths), doiLink: meta.pmid ? null : readDoiLink(paths) };
     // A tier whose attempts were logged line by line closes with a bare
     // "failed" — the reasons are the lines above; its attempts entry keeps them.
     const tried = new Set<string>();
@@ -368,7 +420,7 @@ export function registerTools(server: McpServer): void {
   // fh_library_status(id) — read-only: presence and level.
   server.tool(
     "fh_library_status",
-    "Read-only status of the library entry for one ID — an article, a drug label or a trial record: the same status JSON as fh_library_add, or level \"missing\" when there is no entry. Never fetches. Fields: pmid, pmcid, setid, nctid, publications, year, publication_types, retracted, corrections ({type, pmid, source}), citable, comment, has_abstract, level (full_text | abstract | title), fulltext (\"not tried\": no source tried yet; \"stored\": the full text exists, an abstract_only read did not use it), version, retrieved_by, glyphs_unresolved (symbols the PDF font lost), error.",
+    "Read-only status of the library entry for one ID — an article, a drug label or a trial record: the same status JSON as fh_library_add, or level \"missing\" when there is no entry. Never fetches. A malformed ID answers the same JSON with error (\"invalid id\", for a URL with what to use instead). Fields: pmid, pmcid, setid, nctid, publications, year, publication_types, retracted, corrections ({type, pmid, source}), citable, comment, has_abstract, level (full_text | abstract | title), fulltext (\"not tried\": no source tried yet; \"stored\": the full text exists, an abstract_only read did not use it), version, retrieved_by, glyphs_unresolved (symbols the PDF font lost), error.",
     { id: idSchema },
     async ({ id }) => {
       const parsed = parseId(id);
@@ -388,7 +440,14 @@ export function registerTools(server: McpServer): void {
   // verification. Outline first, then a section by heading or passages by query.
   server.tool(
     "fh_library_read",
-    "One piece of a stored document's Markdown, never the whole. No section/query: the outline (headings with word counts; full text or abstract only). section: that heading's own text (case-insensitive substring; a repeated heading as \"Participants [3/12]\"), capped at max_chars, its subsections listed. query: passages holding every term, each a window of at most 1000 chars with its section, best first, at most max_hits (more: how many further passages match); partial: true with missing_terms when no passage holds them all. section and query together: inside that section. Case, accents, hyphens, plurals and -ed/-ing forms match; a matching table row comes with its header row. section \"Abstract\" on a full text without one: the stored abstract; \"Declarations\": funding, conflicts of interest, acknowledgements, ethics. A missing article is added first (added: true). abstract_only: true reads only the abstract, at once — use it whenever the abstract is enough (screening, design, size, main finding); without it, an article whose full text was never searched for gets a search for the full text first (seconds, up to a minute, once).",
+    [
+      "One piece of a stored document's Markdown, never the whole. Three ways to ask:",
+      "- no section, no query: the outline, headings with word counts (full text, or abstract only).",
+      "- section: that heading's own text, capped at max_chars, its subsections listed. The heading matches as a case-insensitive substring; a repeated heading as \"Participants [3/12]\". \"Abstract\" on a full text without one: the stored abstract; \"Declarations\": funding, conflicts of interest, acknowledgements, ethics.",
+      "- query: the passages holding every term, best first, at most max_hits (more: how many further passages match), each a window of at most 1000 chars with its section. Case, accents, hyphens, plurals and -ed/-ing forms match; a matching table row comes with its header row. partial: true with missing_terms when no passage holds them all. With section: inside that section.",
+      "A missing article is added first (added: true). abstract_only: true reads only the abstract, at once: use it whenever the abstract is enough (screening, design, size, main finding). Without it, an article whose full text was never searched for gets that search first (seconds, up to a minute, once).",
+      "A malformed ID, or an article that cannot be added, answers error.",
+    ].join("\n"),
     {
       id: idSchema,
       section: z.string().optional().describe("Heading from the outline (case-insensitive substring)."),
@@ -514,7 +573,24 @@ export function registerTools(server: McpServer): void {
   // level, retracted count.
   server.tool(
     "fh_info",
-    `The server and the whole library as JSON: this server's package name and version (which build is loaded), its log file; evidence directory (evidence_dir) and host; entry count and size on disk, by type and by level (by_type, by_level), as of counted — up to ${COUNTS_MAX_AGE_MS / 60_000} minutes old, counted again in the background; per type (pmid, doi, dailymed, nct, url — pages stored by fh_fetch_url) the entries by level (full_text, abstract, title), retractions and fulltext_not_tried (articles stored from PubMed alone) (types); counts of retracted and not-citable entries and of errata, expressions of concern and updates (retracted, not_citable, errata, concerns, updates); the retrieval sources in run order and which are off (tiers); the multi-stage download (download): the Playwright servers with the version they must run, the Chrome stages, whether an unlocker is configured; the configuration and where each value came from — environment, .env or default, never the value (config); the decision model behind fh_verify_claim and whether it answers right now (verify);${evidEnabled() ? " how many EVIDs there are and how many hold an evidence map (evid: entries, evidence_maps);" : ""}${evidenceMapEnabled() ? " the discovery, screening and ranking models of fh_evmap_create_map and where its prompts come from (evidence_map);" : ""}${webSearchConfigured() ? " the providers behind fh_web_search (web_search);" : ""} the unlockers and whether each answers right now (unlockers); our own stage hosts — fetch proxy, Playwright servers, Chrome — and whether each is reachable right now (stages); this server's cache hits and misses since it started (cache): verify (fh_verify_claim), fetch (fh_fetch_url), search (the search tools), pubmed (fh_pubmed_fetch_articles, per PMID).`,
+    [
+      "Is this server set up and working, and what does the library hold: one JSON answer, no arguments. Use it to see which build is loaded, to find why a download, fh_verify_claim or a search fails (is the service configured, does it answer right now), and for the library's size. For the state of one entry use fh_library_status.",
+      `Good to know: each service is asked when you call (seconds; up to a minute when one does not answer). The counts are as of counted, up to ${COUNTS_MAX_AGE_MS / 60_000} minutes old, counted again in the background. A configuration value is never shown, only where it came from.`,
+      "Fields:",
+      "- package, version, log: the build and its log file; evidence_dir, host",
+      "- entries, size, by_type, by_level: the library's counts; types: per type (pmid, doi, dailymed, nct, url — pages stored by fh_fetch_url) its entries by level (full_text, abstract, title), retracted and fulltext_not_tried (articles stored from PubMed alone)",
+      "- retracted, not_citable, errata, concerns, updates: entries with such a notice",
+      "- tiers: the retrieval sources in run order, and which are off",
+      "- download: the Playwright servers with the version they must run, the Chrome stages, whether an unlocker is configured",
+      "- config: each setting's source (environment, .env or default)",
+      "- verify: the decision model behind fh_verify_claim, and whether it answers",
+      ...(evidEnabled() ? ["- evid: how many EVIDs there are (entries) and how many hold an evidence map (evidence_maps)"] : []),
+      ...(evidenceMapEnabled() ? ["- evidence_map: the discovery, screening and ranking models of fh_evmap_create_map, and where its prompts come from"] : []),
+      ...(webSearchConfigured() ? ["- web_search: the providers behind fh_web_search"] : []),
+      ...(dataciteInfo() ? ["- datacite: the fh_datacite tools' system (test or production), resolver, account, prefix, new_doi (a new DOI's form)"] : []),
+      "- unlockers: whether each answers (checked_secs_ago: a check reused, up to 15 min old); stages: our own hosts (fetch proxy, Playwright servers, Chrome), whether each is reachable",
+      "- cache: hits and misses since this server started: verify (fh_verify_claim), fetch (fh_fetch_url), search (the search tools), pubmed (fh_pubmed_fetch_articles, per PMID)",
+    ].join("\n"),
     {},
     async () => {
       const info = libraryInfo(FH_EVIDENCE_DIR, HOST);
@@ -522,23 +598,28 @@ export function registerTools(server: McpServer): void {
       const countsP = libraryCounts(FH_EVIDENCE_DIR);
       // Is the decision model answering? One tiny request: a one-line state, one yes/no question.
       const cfg = verifyConfig();
-      // Each unlocker the same way, alongside (one request to example.com each).
-      const unlockerChecks = Promise.all(info.unlockers.map((u) => unlockerHealth(u.provider)));
+      // Each unlocker the same way, alongside (one request to example.com each) — asked at most every 15 minutes
+      // per library, as the model's check is: each is billed (src/health.ts).
+      const unlockerChecks = Promise.all(info.unlockers.map((u) => recentHealth(FH_EVIDENCE_DIR, `unlocker:${u.provider}`, () => unlockerHealth(u.provider))));
       // Our own stage hosts: one TCP connect each (src/hosts.ts), free.
       const stageChecks = Promise.all(info.stages.map((s) => probe(s.host, s.port)));
       if (info.verify && cfg) {
-        const t0 = Date.now();
-        try {
-          const a = await decider(cfg)("The sky is blue.", { q: { type: "noul", instructions: "Is the sky blue?" } });
-          info.verify = { ...info.verify, ok: typeof a.q?.noul === "number", ms: Date.now() - t0, error: null };
-        } catch (e) {
-          info.verify = { ...info.verify, ok: false, ms: Date.now() - t0, error: e instanceof Error ? e.message : String(e) };
-        }
+        const h = await recentHealth(FH_EVIDENCE_DIR, `verify:${info.verify.provider}:${info.verify.model}:${info.verify.base_url}`, async () => {
+          const t0 = Date.now();
+          try {
+            const a = await decider(cfg)("The sky is blue.", { q: { type: "noul", instructions: "Is the sky blue?" } });
+            const ok = typeof a.q?.noul === "number";
+            return { ok, ms: Date.now() - t0, error: ok ? null : "no answer to the test question" };
+          } catch (e) {
+            return { ok: false, ms: Date.now() - t0, error: e instanceof Error ? e.message : String(e) };
+          }
+        });
+        info.verify = { ...info.verify, ...h };
       }
       info.unlockers = (await unlockerChecks).map((h, i) => ({ ...info.unlockers[i], ...h }));
       info.stages = (await stageChecks).map((h, i) => ({ ...info.stages[i], up: h.up, ms: h.ms, error: h.error }));
       const counts = await countsP;
-      log("info", null, `entries=${counts ? counts.entries : "counting"}${counts && Object.keys(counts.by_type).length ? ` (${typeOrder(Object.keys(counts.by_type)).map((t) => `${t} ${counts.by_type[t]}`).join(", ")})` : ""}${info.verify ? ` verify ${info.verify.model} ${info.verify.ok ? `ok ${info.verify.ms} ms` : `down: ${info.verify.error}`}` : " verify not configured"}${info.unlockers.map((u) => ` unlocker ${u.provider} ${u.ok ? `ok ${u.ms} ms` : `down: ${u.error}`}`).join("")}${info.stages.map((s) => ` stage ${s.name} ${s.up ? `up ${s.ms} ms` : `down: ${s.error}`}`).join("")}`);
+      log("info", null, `entries=${counts ? counts.entries : "counting"}${counts && Object.keys(counts.by_type).length ? ` (${typeOrder(Object.keys(counts.by_type)).map((t) => `${t} ${counts.by_type[t]}`).join(", ")})` : ""}${info.verify ? ` verify ${info.verify.model} ${info.verify.ok ? (info.verify.checked_secs_ago === undefined ? `ok ${info.verify.ms} ms` : "ok cached") : `down: ${info.verify.error}`}` : " verify not configured"}${info.unlockers.map((u) => ` unlocker ${u.provider} ${u.ok ? (u.checked_secs_ago === undefined ? `ok ${u.ms} ms` : "ok cached") : `down: ${u.error}`}`).join("")}${info.stages.map((s) => ` stage ${s.name} ${s.up ? `up ${s.ms} ms` : `down: ${s.error}`}`).join("")}`);
       // This process's cache counters since it started (every server publishes them under <library>/.servers/ as well).
       const s = currentStats();
       const cache = s ? { since: s.started, verify: s.verify, fetch: s.fetch, search: s.search, pubmed: s.pubmed } : null;
@@ -616,7 +697,13 @@ export function registerTools(server: McpServer): void {
   // abstract level as fh_library_add's first stage (src/pubmedbatch.ts).
   server.tool(
     "fh_pubmed_fetch_articles",
-    `Title, first author, year, publication types, retracted and library level for up to ${MAX_PMIDS} PubMed IDs in one call. Faster and far smaller than asking PubMed: known articles come from disk, the rest in one request, stored for every later call; rows as arrays in columns order, ~120 characters an article. design, participants and population where known: what kind of study it is, read from the abstract by a model. Level "not found": PubMed has no such record. For abstract or full text: fh_library_read.`,
+    [
+      `The key facts of up to ${MAX_PMIDS} PubMed articles in one call: title, first author, year, publication types, retracted and library level. Use it to look at a list of PMIDs (a search's hits, a reference list) without reading each; for an abstract or full text: fh_library_read.`,
+      "Faster and far smaller than asking PubMed: articles the library knows come from disk, the rest in one request, and all are stored for every later call.",
+      "Answer: columns, and rows as arrays in that order, about 120 characters an article.",
+      "- design, participants, population: what kind of study it is, read from the abstract by a model; filled where known.",
+      '- level "not found": PubMed has no such record.',
+    ].join("\n"),
     { pmids: z.array(z.string()).min(1).max(MAX_PMIDS).describe('PubMed IDs, "30955454" or "pmid:30955454", up to 200.') },
     async ({ pmids }) => {
       const t0 = Date.now();
@@ -692,7 +779,7 @@ Citations from OpenAlex. Cached ${searchCacheDays()} days.`,
     server.tool(
       "fh_evid_create",
       "Create an EVID: a store that outlives the session, named by its metadata. metadata: any fields, any JSON values (e.g. { \"topic\": \"…\" }); fixed once created — a fact known only later is an object (fh_evid_put). The server adds created (UTC) and returns the EVID (evid:<16 hex digits>, a hash of the metadata). Every create is a new EVID, even with the same fields.",
-      { metadata: z.record(z.any()).describe("The fields describing what the EVID is for; any JSON values. created is added by the server.") },
+      { metadata: z.record(z.string(), z.any()).describe("The fields describing what the EVID is for; any JSON values. created is added by the server.") },
       async ({ metadata }) => {
         const r = createEvid(FH_EVIDENCE_DIR, metadata);
         log("evid", r.ok ? r.evid : null, r.ok ? `created fields=${Object.keys(metadata).join(",")}` : `create error ${r.error}`);
@@ -703,7 +790,7 @@ Citations from OpenAlex. Cached ${searchCacheDays()} days.`,
       "fh_evid_find",
       "The EVIDs whose metadata has every given field, with their metadata. A text matches when the stored text holds every word given, case ignored (\"telmisartan\" finds \"Telmisartan for Health & Longevity\"); other values must be equal. Equal matches first, then newest first. query {} lists all.",
       {
-        query: z.record(z.any()).describe('Fields and values, e.g. { "topic": "Telmisartan for Health & Longevity" } or { "topic": "telmisartan" }.'),
+        query: z.record(z.string(), z.any()).describe('Fields and values, e.g. { "topic": "Telmisartan for Health & Longevity" } or { "topic": "telmisartan" }.'),
         max_results: z.number().int().min(1).max(100).default(20).describe("EVIDs to return (1–100); total counts every match."),
       },
       async ({ query, max_results }) => {
@@ -753,6 +840,125 @@ Citations from OpenAlex. Cached ${searchCacheDays()} days.`,
         const r = getObject(FH_EVIDENCE_DIR, evid, name, opts);
         log("evid", evid, r.ok ? `get ${name}${opts.previous ? " previous" : ""}${opts.section ? ` section=${opts.section}` : ""}${opts.query ? ` query=${opts.query}` : ""}${opts.lines ? ` lines=${opts.lines}` : ""}${"too_large" in r ? " outline" : ""}` : `get error ${r.error}`);
         return answer(r);
+      }
+    );
+  }
+
+  // fh_datacite_* — DOIs at DataCite; development only, offered with FH_DATACITE_ENABLED (#103); src/datacite.ts,
+  // stuff/datacite/CONCEPT.md. Only with the account's keys: without them no tool, reading included.
+  const dc = dataciteConfig(), di = dataciteInfo();
+  if (dc && di) {
+    const TEST = di.system === "test";
+    const ON = TEST ? " on DataCite's test system" : di.system === "other" ? ` at ${di.api}` : "";
+    const LINK = di.resolver ? `doi_url (${di.resolver}/<doi>: the link to print; it leads to url once the DOI is public)` : null;
+    const TEST_NOTE = TEST ? [`Test system: its DOIs are not real and resolve only at ${di.resolver ?? "its own resolver"}, not at doi.org.`] : [];
+    const fieldsOf = (...f: (string | null)[]) => f.filter(Boolean).join(", ");
+    const answer = (tool: string, id: string | null, r: { ok: boolean; error?: string; input?: true } & Record<string, unknown>, line: string) => {
+      const { ok, input: _i, ...rest } = r;
+      log("datacite", id, ok ? `${tool} ${line}` : `${tool} ${r.input ? "error" : "failed"} ${r.error}`);
+      return { content: [{ type: "text" as const, text: compact(rest) }], ...(ok ? {} : { isError: true }) };
+    };
+    const thrown = (tool: string, id: string | null, e: unknown) => answer(tool, id, { ok: false, error: e instanceof Error ? e.message : String(e) }, "");
+    const doiArg = z.string().describe('The DOI, e.g. "10.5438/0012"; "doi:…" or a doi.org URL also work.');
+    const metadataArg = (lead: string) => z.record(z.string(), z.any()).describe(`${lead}DataCite REST attributes (schema 4): titles [{ title }], creators [{ name, nameType }], publisher, publicationYear, types { resourceTypeGeneral: "Text" }, descriptions, subjects, dates, relatedIdentifiers, version, language, rightsList. Not here: the DOI, its state, the URL.`);
+    server.tool(
+      "fh_datacite_get_doi",
+      [
+          `The record of one ${TEST ? "DOI on DataCite's test system" : `DataCite DOI${ON}`}, the account's own or another public one: its state, URL and metadata. Not for a journal article's DOI — that is at Crossref: fh_library_read.`,
+          `Answer: ${fieldsOf("doi", LINK, "state (draft, registered, findable = public)", "url (the landing page)")}, created, registered, updated, metadata (the fields as DataCite holds them).`,
+          "A list of more than 25 entries is given as its count; name its field in fields to read it whole.",
+          "Of drafts, only the account's own are readable.",
+          "Error: no such DOI at DataCite.",
+        ].join("\n"),
+      { doi: doiArg, fields: z.array(z.string()).optional().describe('Return only these metadata fields, each whole: ["relatedIdentifiers"].') },
+      async ({ doi, fields }) => {
+        try { const r = await getDoi(doi, fields, dataciteDeps(FH_EVIDENCE_DIR)); return answer("get", doi, r.ok ? { ok: true, ...lean(r.record) } : r, r.ok ? `ok ${r.record.state}` : ""); } catch (e) { return thrown("get", doi, e); }
+      }
+    );
+    server.tool(
+      "fh_datacite_list_dois",
+      [
+        `The DOIs of this server's DataCite account (prefix ${dc.prefix}${TEST ? ", test system" : ""}), newest first; filter by state, url or query.`,
+        `Answer: total and rows as arrays in columns order: ${fieldsOf("doi", di.resolver ? "doi_url" : null, "state", "url")}, title, year, created, updated. One record in full: fh_datacite_get_doi.`,
+        "The list runs seconds to minutes behind a write; fh_datacite_get_doi is current.",
+      ].join("\n"),
+      {
+        state: z.enum(["draft", "registered", "findable"]).optional().describe("draft: not public, deletable. findable: public. registered: resolves, hidden from DataCite's search."),
+        url: z.string().optional().describe("The DOI leading to exactly this address (a trailing / aside)."),
+        query: z.string().optional().describe("Words, or DataCite field syntax: titles.title:telmisartan, publicationYear:2026."),
+        max_results: z.number().int().min(1).max(MAX_DOIS).default(25).describe(`Rows per page (1–${MAX_DOIS}).`),
+        page: z.number().int().min(1).default(1).describe("Page of rows: 2, 3, … for more."),
+      },
+      async (args) => {
+        try { const r = await listDois(args, dataciteDeps(FH_EVIDENCE_DIR)); return r.ok ? (log("datacite", null, `list ok rows=${r.rows.length} total=${r.total}${args.state ? ` state=${args.state}` : ""}${args.url ? ` url=${args.url}` : ""}${args.query ? ` | ${args.query}` : ""}`), { content: [{ type: "text" as const, text: searchAnswer(r) }] }) : answer("list", null, r, ""); } catch (e) { return thrown("list", null, e); }
+      }
+    );
+    server.tool(
+      "fh_datacite_create_doi",
+      [
+        "Register a DOI for a published work, as a draft: not public yet, still deletable. Publishing is a separate call, fh_datacite_publish_doi.",
+        `The server draws the DOI, never send one: ${di.new_doi} with the digits drawn${di.namespace ? `; "${di.namespace}" is this server's namespace` : ""}.`,
+        "Refused when the URL already has a DOI in the account; the answer names it — change that one with fh_datacite_update_doi.",
+        `Answer: ${fieldsOf("doi", LINK, "state", "url")}; missing_to_publish: the required fields still absent (titles, creators, publisher, publicationYear, types.resourceTypeGeneral). doi${di.resolver ? " and doi_url are" : " is"} final from here on and can be printed in the work before it is published.`,
+        "Error: DataCite refused the metadata, with its reason.",
+        ...TEST_NOTE,
+      ].join("\n"),
+      { url: z.string().describe("The work's landing page (http/https), not a bare file."), metadata: metadataArg("").optional(), namespace: z.string().optional().describe(di.namespace ? `Another name in front of the drawn suffix than this server's "${di.namespace}"; leave it out to get ${di.new_doi}. Lower-case letters, digits, -.` : `Opens the drawn suffix: "reports" gives ${exampleDoi(dc.prefix, "reports")}. Lower-case letters, digits, -.`) },
+      async (args) => {
+        try { const r = await createDoi(args, dataciteDeps(FH_EVIDENCE_DIR)); return answer("create", r.ok ? r.doi : null, r, r.ok ? `ok draft | ${r.url}` : ""); } catch (e) { return thrown("create", null, e); }
+      }
+    );
+    server.tool(
+      "fh_datacite_update_doi",
+      [
+        "Change the metadata or the URL of one of the account's DOIs, draft or public — when the work was revised or moved.",
+        "A field given replaces the stored one whole (a list is replaced, not appended to; an empty list clears it); fields not given stay. The DOI and its state cannot be changed.",
+        `Answer: ${fieldsOf("doi", di.resolver ? "doi_url" : null, "state", "url")}; for a draft also missing_to_publish.`,
+        "Error: no such DOI in the account; the new URL already has another DOI; or DataCite refused the metadata, with its reason.",
+      ].join("\n"),
+      { doi: doiArg, metadata: metadataArg("Only the fields to change. ").optional(), url: z.string().optional().describe("The new landing page (http/https).") },
+      async (args) => {
+        try { const r = await updateDoi(args, dataciteDeps(FH_EVIDENCE_DIR)); return answer("update", args.doi, r, r.ok ? `ok ${r.state}${args.url ? ` url=${r.url}` : ""}${args.metadata ? ` fields=${Object.keys(args.metadata).join(",")}` : ""}` : ""); } catch (e) { return thrown("update", args.doi, e); }
+      }
+    );
+    server.tool(
+      "fh_datacite_publish_doi",
+      [
+        "Make a draft DOI public (findable), or a hidden one public again. A public DOI is never deleted: it can be changed, and hidden from DataCite's search (fh_datacite_hide_doi), but it stays registered for good.",
+        "Call it once the work is online at the DOI's URL and the metadata is right; check the draft first with fh_datacite_get_doi.",
+        `Answer: ${fieldsOf("doi", di.resolver ? "doi_url (resolves from now on)" : null, "state (findable)", "url")}; already: true when it was public before.`,
+        "Error: required metadata is missing (the fields are named), or no such DOI in the account.",
+        ...TEST_NOTE,
+      ].join("\n"),
+      { doi: doiArg },
+      async ({ doi }) => {
+        try { const r = await publishDoi(doi, dataciteDeps(FH_EVIDENCE_DIR)); return answer("publish", doi, r, r.ok ? `ok ${r.state}${r.already ? " already" : ""} | ${r.url}` : ""); } catch (e) { return thrown("publish", doi, e); }
+      }
+    );
+    server.tool(
+      "fh_datacite_hide_doi",
+      [
+        "Hide a public DOI of the account: take back a publish made by mistake, or withdraw a work. It becomes registered — out of DataCite's search and public record, while its link still leads to the URL.",
+        "The DOI is not deleted and cannot be. fh_datacite_publish_doi makes it public again.",
+        `Answer: ${fieldsOf("doi", di.resolver ? "doi_url" : null, "state (registered)", "url")}; already: true when it was hidden before.`,
+        "Error: a draft (not public: delete it instead), or no such DOI in the account.",
+      ].join("\n"),
+      { doi: doiArg },
+      async ({ doi }) => {
+        try { const r = await hideDoi(doi, dataciteDeps(FH_EVIDENCE_DIR)); return answer("hide", doi, r, r.ok ? `ok ${r.state}${r.already ? " already" : ""}` : ""); } catch (e) { return thrown("hide", doi, e); }
+      }
+    );
+    server.tool(
+      "fh_datacite_delete_doi",
+      [
+        "Delete a draft DOI of the account: one created by mistake or no longer needed.",
+        "Only a draft: a public or hidden DOI is refused and stays for good.",
+        "Answer: doi, deleted: true.",
+        "Error: not a draft, or no such DOI in the account.",
+      ].join("\n"),
+      { doi: doiArg },
+      async ({ doi }) => {
+        try { const r = await deleteDoi(doi, dataciteDeps(FH_EVIDENCE_DIR)); return answer("delete", doi, r, r.ok ? "ok" : ""); } catch (e) { return thrown("delete", doi, e); }
       }
     );
   }
@@ -974,7 +1180,7 @@ PubMed articles only: what a drug label states (adverse reactions, interactions,
   };
   server.tool(
     "fh_clinicaltrials_get_study_record",
-    "One ClinicalTrials.gov trial as a review needs it: titles, status and why stopped, phase, design, enrollment, dates, sponsor, conditions, interventions, primary outcomes, eligibility, sites, result publications as pmid: IDs, has_results, brief summary. From the stored record; a missing trial is added first. The whole record: fh_library_read(\"nct:…\").",
+    "One ClinicalTrials.gov trial as a review needs it: titles, status and why stopped, phase, design, enrollment, dates, sponsor, conditions, interventions, primary outcomes, eligibility, sites, result publications as pmid: IDs, has_results, brief summary. From the stored record; a missing trial is added first. A malformed ID, or one the registry does not have, answers error. The whole record: fh_library_read(\"nct:…\").",
     { nct: z.string().describe('The NCT ID: "nct:05173896", "NCT05173896" or the eight digits.') },
     async ({ nct }) => {
       const t0 = Date.now();
@@ -990,7 +1196,7 @@ PubMed articles only: what a drug label states (adverse reactions, interactions,
   );
   server.tool(
     "fh_clinicaltrials_get_study_results",
-    "The posted results of one ClinicalTrials.gov trial — participant flow, baseline, every outcome measure as a table, adverse events — as Markdown from the stored record, capped at max_chars, outcome titles listed; fh_library_read(\"nct:…\", section: <title>) returns one measure whole. has_results false when the registry holds none. A missing trial is added first.",
+    "The posted results of one ClinicalTrials.gov trial — participant flow, baseline, every outcome measure as a table, adverse events — as Markdown from the stored record, capped at max_chars, outcome titles listed; fh_library_read(\"nct:…\", section: <title>) returns one measure whole. has_results false when the registry holds none. A missing trial is added first. A malformed ID, or one the registry does not have, answers error.",
     { nct: z.string().describe('The NCT ID: "nct:05173896", "NCT05173896" or the eight digits.'), max_chars: z.number().int().min(200).max(60000).default(6000).describe("Cap for the results text (default 6000).") },
     async ({ nct, max_chars }) => {
       const e = await nctEntry(nct);

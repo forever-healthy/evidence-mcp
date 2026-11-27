@@ -1,4 +1,5 @@
 import { coreTier } from "./core.js";
+import { doilink } from "./doilink.js";
 import { europepmc } from "./europepmc.js";
 import { openalex } from "./openalex.js";
 import { pmc } from "./pmc.js";
@@ -18,4 +19,5 @@ export const BUILTIN: { name: string; make: (o: TierOptions) => Tier }[] = [
   { name: "unpaywall", make: () => unpaywall },
   { name: "openalex", make: () => openalex },
   { name: "core", make: (o) => coreTier(o.api_key) },
+  { name: "doi-link", make: () => doilink },
 ];

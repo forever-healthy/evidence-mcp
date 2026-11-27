@@ -1,4 +1,4 @@
-import { checkFulltext, isWallPage, proseWords } from "./checks.js";
+import { checkFulltext, isWallPage, proseWords, anotherDocument } from "./checks.js";
 import { downNote, hostState } from "./hosts.js";
 import { htmlToMarkdown } from "./html.js";
 import { DOWNLOAD_HEADERS, fetchBytes, toHttps } from "./http.js";
@@ -11,6 +11,7 @@ import { firstOk, openRequest, type Req, type Task } from "./race.js";
 import { recordStage, walled, wallNote } from "./walls.js";
 import { errMsg, miss, type Candidate, type Paper, type RunContext, type TierHit, type TierResult } from "./tiers/tier.js";
 import { stripScripts, stripTags } from "./text.js";
+import { log } from "./log.js";
 
 // The download helper: a tier that has located copies of the paper calls it
 // to fetch them, PDFs first, and convert whatever comes back (PDF, JATS XML,
@@ -180,6 +181,12 @@ async function tryOne(p: Paper, c: Candidate, tier: string, via: Via = "plain", 
   // (a 502 after its retries, typically a copy that is not open after all).
   if (typeof via === "object" && "unlocker" in via && !bytes.length) return { ok: false, reason: `${via.unlocker}: empty response` };
   const r = await convertBytes(p, bytes, contentType);
+  // A copy thrown out as another document is said loudly: the check must stay rare (8 of 5,164 on live when it was
+  // built, 2026-11-26) — a log with many of these lines means it throws out real full texts.
+  if (!r.ok && r.refused) {
+    log("add", p.pmid ? `pmid:${p.pmid}` : p.doi ? `doi:${p.doi}` : null, `!! full text refused as ${r.reason} — ${got.url ?? c.url} | it names the paper but holds no sentence of its abstract; if this line is frequent, the check is wrong (#7)`);
+    return { ok: false, reason: r.reason, url: got.url };
+  }
   if (!r.ok) return { ok: false, reason: c.pdf && r.format !== "pdf" ? `not a pdf (${r.reason})` : r.reason, url: got.url, pdfUrl: r.format === "html" ? pdfLink(bytes.toString("utf8"), got.url ?? c.url) : undefined };
   return { ok: true, tier, format: r.format, raw: r.format === "pdf" ? bytes : bytes.toString("utf8"), md: r.md, version: c.version };
 }
@@ -210,7 +217,7 @@ export function serviceMessage(bytes: Buffer, contentType = ""): string {
   return (visible || text).slice(0, 160);
 }
 
-export type Converted = { ok: true; format: TierHit["format"]; md: string } | { ok: false; reason: string; format?: TierHit["format"] };
+export type Converted = { ok: true; format: TierHit["format"]; md: string } | { ok: false; reason: string; format?: TierHit["format"]; refused?: true };   // refused: converted and checked, but another document (#7)
 
 // Bytes of a copy (fetched or unlocked) → checked
 // Markdown. The format is sniffed from the content, the Content-Type only
@@ -225,6 +232,13 @@ function describe(reason: string, format: TierHit["format"], md: string): string
   if (reason === "no methods/results") return `no article body (${seen})`;
   if (reason === "title missing") return `neither title nor DOI in text (${seen})`;
   return reason;
+}
+
+// A document's Markdown source as the text to read: without its front matter, its comments (notes the page does
+// not show), its own title line (ours stands above it) and empty HTML shells left for the site's build.
+export function sourceMarkdown(text: string, ownTitle = false): string {
+  const shown = text.replace(/^\uFEFF/, "").replace(/^---\n[\s\S]*?\n---\n/, "").replace(/<!--[\s\S]*?-->/g, "").replace(/^[ \t]*<(\w+)\b[^>]*>\s*<\/\1>[ \t]*$/gm, "");
+  return (ownTitle ? shown : shown.replace(/^\s*# [^\n]*\n/, "")).replace(/\n{3,}/g, "\n\n").trim() + "\n";
 }
 
 export async function convertBytes(p: Paper, bytes: Buffer, contentType = ""): Promise<Converted> {
@@ -247,6 +261,10 @@ export async function convertBytes(p: Paper, bytes: Buffer, contentType = ""): P
       if (!doc.title) doc.title = p.title;
       if (!doc.hasBody) return { ok: false, reason: "xml without body" };
       md = renderFulltextMd(doc, p.headLine);
+    } else if (/text\/(x-)?markdown/i.test(contentType) && !/<html|<!doctype html/i.test(text.slice(0, 500))) {
+      // The document's own Markdown source (a page names it: <link rel="alternate" type="text/markdown">, src/tiers/doilink.ts).
+      format = "md";
+      md = `# ${p.title}\n\n${p.headLine}\n\n${sourceMarkdown(text)}`;
     } else if (/text\/html|<html/i.test(contentType + text.slice(0, 500))) {
       format = "html";
       const body = /<body[^>]*>([\s\S]*)<\/body>/i.exec(text)?.[1] ?? text;
@@ -258,11 +276,19 @@ export async function convertBytes(p: Paper, bytes: Buffer, contentType = ""): P
   // The checks run on the converted content WITHOUT the "# <title>" heading the
   // converters prepend from PubMed's title — otherwise the title check would
   // always pass and any document would count as this paper.
-  const content = format === "xml" ? md : md.replace(/^# [^\n]*\n/, "");   // JATS carries the paper's own title
+  // JATS carries the paper's own title, and so does a Markdown source: checked with its own title line, not ours.
+  const content = format === "xml" ? md : format === "md" ? `${p.headLine}\n\n${sourceMarkdown(bytes.toString("utf8"), true)}` : md.replace(/^# [^\n]*\n/, "");
   // HTML: the title may sit in a <header> or <title> the converter drops — look in the raw page text too.
   const rawText = format === "html" ? stripTags(stripScripts(bytes.toString("utf8")), " ") : undefined;
-  const check = checkFulltext(content, p.title, rawText, p.doi, format === "xml", format === "pdf");
+  // A Markdown source, like a PDF, is a document and not a page about one: the title at its start and an article's prose, headings as they are.
+  const check = checkFulltext(content, p.title, rawText, p.doi, format === "xml", format === "pdf" || format === "md");
   if (!check.ok) return { ok: false, reason: describe(check.reason, format, content), format };
+  // It names the paper — but is it the paper? No sentence of the abstract in it: its supplement, or another document (#7).
+  const body = content.startsWith(p.headLine) ? content.slice(p.headLine.length) : content.replace(p.headLine, "");
+  // Not for XML: a publisher's or PMC's structured article for this ID is the article (all eight found were PDFs; PNAS gives
+  // PubMed its Significance statement as the abstract, which the article's XML does not hold — pmid:35286195).
+  const other = format === "xml" ? null : anotherDocument(body, p.title, p.abstract);
+  if (other) return { ok: false, reason: `${other} (${format}, ${content.split(/\s+/).filter(Boolean).length} words, no sentence of the abstract)`, format, refused: true };
   return { ok: true, format, md };
 }
 

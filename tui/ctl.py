@@ -64,7 +64,7 @@ from textual.widgets import Input, Log, Select, Static  # noqa: E402
 
 NULL = getattr(Select, "NULL", getattr(Select, "BLANK", None))  # the "no selection" sentinel
 
-TUI_VERSION = 251   # plain counter: bump on every change to tui/
+TUI_VERSION = 254   # plain counter: bump on every change to tui/
 REPO_ROOT = Path(__file__).resolve().parents[1]   # this checkout: git pull, the TUI's own version and files
 CTL_PATH = Path(__file__).resolve()
 CWD = Path.cwd()                                   # the caller's project: its .env and its library (run.sh keeps it)
@@ -659,8 +659,6 @@ VERIFY_PROVIDERS = {
 }
 
 
-UNLOCK_EVERY = 15 * 60   # a live unlocker check costs a request: at most every 15 minutes per unlocker
-_unlock_last: dict = {}   # name -> last result
 UNLOCKERS = (("firecrawl", "FH_FIRECRAWL_API_KEY"), ("zenrows", "FH_ZENROWS_API_KEY"), ("zyte", "FH_ZYTE_API_KEY"), ("brightdata", "FH_BRIGHTDATA_API_KEY"))   # src/unlock.ts order
 
 
@@ -670,64 +668,7 @@ def unlocker_order() -> list[str]:
     return [n for n, k in UNLOCKERS if _dotenv(k)]
 
 
-def _unlock_request(name: str):
-    """One request for example.com through an unlocker: (urllib request, how to read the body)."""
-    import urllib.request, base64
-    if name == "zenrows":
-        from urllib.parse import quote
-        return urllib.request.Request(f"https://api.zenrows.com/v1/?apikey={quote(_dotenv('FH_ZENROWS_API_KEY') or '')}&url={quote('https://example.com/')}&mode=auto", headers={"User-Agent": "evidence-mcp-tui"}), lambda b, h: b
-    if name == "firecrawl":
-        body = json.dumps({"url": "https://example.com/", "formats": ["rawHtml"], "parsers": [], "proxy": "auto"}).encode()
-        return urllib.request.Request("https://api.firecrawl.dev/v2/scrape", data=body, headers={"Authorization": f"Bearer {_dotenv('FH_FIRECRAWL_API_KEY')}", "Content-Type": "application/json", "User-Agent": "evidence-mcp-tui"}), \
-            lambda b, h: ((json.loads(b or b"{}").get("data") or {}).get("rawHtml") or "").encode()
-    if name == "zyte":
-        auth = base64.b64encode(((_dotenv("FH_ZYTE_API_KEY") or "") + ":").encode()).decode()
-        body = json.dumps({"url": "https://example.com/", "httpResponseBody": True}).encode()
-        return urllib.request.Request("https://api.zyte.com/v1/extract", data=body, headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json", "User-Agent": "evidence-mcp-tui"}), \
-            lambda b, h: base64.b64decode(json.loads(b or b"{}").get("httpResponseBody") or "")
-    zone = _dotenv("FH_BRIGHTDATA_ZONE") or "mcp_unlocker"
-    body = json.dumps({"zone": zone, "url": "https://example.com/", "format": "raw"}).encode()
-    return urllib.request.Request("https://api.brightdata.com/request", data=body, headers={"Authorization": f"Bearer {_dotenv('FH_BRIGHTDATA_API_KEY')}", "Content-Type": "application/json", "User-Agent": "evidence-mcp-tui"}), lambda b, h: b
-
-
-def check_unlocker(name: str) -> dict:
-    """Whether one unlocker answers: one request for example.com, timed, as fh_info
-    does (src/unlock.ts) — at most every UNLOCK_EVERY seconds, since each is billed;
-    in between the last result stands, with the time it was taken."""
-    import urllib.error
-    last = _unlock_last.get(name)
-    if last and time.time() - last.get("at", 0) < UNLOCK_EVERY:
-        return last
-    req, read = _unlock_request(name)
-    t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=120) as r:
-            raw = r.read()
-            refused = r.headers.get("x-brd-error")   # Bright Data: an IP on the zone's denylist answers 200, empty, the reason in headers
-            why = r.headers.get("x-brd-err-msg") or refused
-            got = read(raw, r.headers)
-        if refused:
-            res = {"provider": name, "ok": False, "error": f"refused: {why[:90]}"}
-        else:
-            ok = b"Example Domain" in got
-            res = {"provider": name, "ok": ok, "error": None if ok else f"unexpected answer ({len(got)} bytes)" if got else "empty answer"}
-    except urllib.error.HTTPError as e:
-        why = e.headers.get("x-brd-err-msg") or ""
-        if not why:
-            try:
-                j = json.loads(e.read() or b"{}"); why = j.get("title") or j.get("detail") or ""
-            except Exception:
-                why = ""
-        res = {"provider": name, "ok": False, "error": f"HTTP {e.code}{': ' + str(why)[:70] if why else ''}"}
-    except Exception as e:
-        res = {"provider": name, "ok": False, "error": "timeout" if "timed out" in str(e) else str(e)[:60]}
-    res.update(secs=time.time() - t0, at=time.time())
-    _unlock_last[name] = res
-    return res
-
-
 SEARCHERS = (("exa", "FH_WEB_SEARCH_EXA_API_KEY"), ("serper", "FH_WEB_SEARCH_SERPER_API_KEY"), ("brave", "FH_WEB_SEARCH_BRAVE_API_KEY"))   # src/websearch.ts order
-_search_last: dict = {}   # name -> last result
 
 
 def searcher_order() -> list[str]:
@@ -735,45 +676,105 @@ def searcher_order() -> list[str]:
     return [n for n, k in SEARCHERS if _dotenv(k)]
 
 
-def check_searcher(name: str) -> dict:
-    """Whether one web search provider answers: one search of one result, timed —
-    at most every UNLOCK_EVERY seconds, since each is billed; in between the last result stands."""
-    import urllib.error, urllib.parse, urllib.request
-    last = _search_last.get(name)
-    if last and time.time() - last.get("at", 0) < UNLOCK_EVERY:
-        return last
-    key = _dotenv(dict(SEARCHERS)[name]) or ""
-    q = "example domain"
-    if name == "exa":
-        req = urllib.request.Request("https://api.exa.ai/search", data=json.dumps({"query": q, "numResults": 1}).encode(), headers={"x-api-key": key, "Content-Type": "application/json", "User-Agent": "evidence-mcp-tui"})
-        hits = lambda d: d.get("results")
-    elif name == "serper":
-        req = urllib.request.Request("https://google.serper.dev/search", data=json.dumps({"q": q, "num": 1}).encode(), headers={"X-API-KEY": key, "Content-Type": "application/json", "User-Agent": "evidence-mcp-tui"})
-        hits = lambda d: d.get("organic")
-    else:
-        req = urllib.request.Request(f"https://api.search.brave.com/res/v1/web/search?{urllib.parse.urlencode({'q': q, 'count': 1})}", headers={"X-Subscription-Token": key, "Accept": "application/json", "User-Agent": "evidence-mcp-tui"})
-        hits = lambda d: (d.get("web") or {}).get("results")
-    t0 = time.time()
+SEARCH_RESULT = re.compile(r"^(?:ok (\w+) ([\d.]+)s |failed (\w+): (.*?)(?: \| |$))")
+UNLOCK_RESULT = re.compile(r"\b(ok|failed) (firecrawl|zenrows|zyte|brightdata)\b(?:: (.*))?")
+UNLOCK_INFO = re.compile(r" unlocker (\w+) (?:ok (\d+) ms|down: (.*?))(?= unlocker | stage |$)")   # fh_info's own check; "ok cached" is a reused one: no news
+ACCOUNT = re.compile(r"^unlocker (HTTP 4\d\d|refused)")   # the service refused us, not the page (src/unlock.ts accountProblem)
+PROVIDER_FRESH = 3600   # a failure older than this no longer makes the server degraded: nothing was asked of the provider since
+TIMEOUTS_IN_A_ROW, TIMEOUT_HOSTS = 5, 3   # an unlocker "not answering": this many timeouts without a success, on this many sites
+
+
+def _log_tail() -> list[tuple[float, str, str, str]]:
+    """The tail of evidence.log as (time, tool, id, message)."""
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            ok = bool(hits(json.loads(r.read() or b"{}")))
-        res = {"provider": name, "ok": ok, "error": None if ok else "no results"}
-    except urllib.error.HTTPError as e:
-        res = {"provider": name, "ok": False, "error": f"HTTP {e.code}"}
-    except Exception as e:
-        res = {"provider": name, "ok": False, "error": "timeout" if "timed out" in str(e) else str(e)[:60]}
-    res.update(secs=time.time() - t0, at=time.time())
-    _search_last[name] = res
-    return res
+        size = LOG_FILE.stat().st_size
+        with LOG_FILE.open("rb") as f:
+            f.seek(max(0, size - LOG_TAIL_BYTES))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in tail.splitlines():
+        m = STAMP.match(line)
+        if not m:
+            continue
+        try:
+            out.append((time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")), m.group(3), m.group(4), m.group(5)))
+        except ValueError:
+            continue
+    return out
 
 
-def check_searchers() -> list[dict]:
-    from concurrent.futures import ThreadPoolExecutor
+def _states(names: list[str], last: dict, now: float) -> list[dict]:
+    out = []
+    for n in names:
+        l = last.get(n)
+        if not l:
+            out.append({"provider": n, "ok": None, "error": None, "secs": None, "at": None, "age": None, "problem": False})
+            continue
+        age = max(0, now - l["at"])
+        out.append({"provider": n, **l, "age": age, "problem": not l["ok"] and age < PROVIDER_FRESH})
+    return out
+
+
+def check_searchers(now: float | None = None, lines: list | None = None) -> list[dict]:
+    """How each web search provider last answered, read from evidence.log — the server logs every
+    search per provider ("search web ok exa 3.9s rows=10", "search web failed exa: HTTP 402"). No
+    request of our own: a check search is billed like any other (Exa $0.007; four TUIs asking
+    every 15 minutes were a quarter of the bill, 2026-11-27). A provider nobody searched with
+    in the log's tail has no state: "no search yet". A refused query (HTTP 400: the caller's
+    words, e.g. site:gov) says nothing about the provider and is passed over."""
     names = searcher_order()
     if not names:
         return []
-    with ThreadPoolExecutor(max_workers=len(names)) as ex:
-        return list(ex.map(check_searcher, names))
+    last: dict = {}
+    for ts, tool, ident, msg in (_log_tail() if lines is None else lines):
+        if tool != "search" or ident != "web":
+            continue
+        r = SEARCH_RESULT.match(msg)
+        if not r or (r.group(4) or "").startswith("HTTP 400"):
+            continue
+        last[r.group(1) or r.group(3)] = {"ok": bool(r.group(1)), "error": r.group(4), "secs": float(r.group(2)) if r.group(2) else None, "at": ts}
+    return _states(names, last, now or time.time())
+
+
+def check_unlockers(now: float | None = None, lines: list | None = None) -> list[dict]:
+    """How each unlocker last did, read from evidence.log — no request of our own (each is billed,
+    and four TUIs asked every 15 minutes). The server's lines say what is the unlocker's and what
+    the page's (src/unlock.ts):
+      up              its last "ok <unlocker>" (a download), or fh_info's own check that answered
+      account         "failed <unlocker>: unlocker HTTP 4xx …" / "unlocker refused …" since then:
+                      key, credit, plan limit, IP not allowed — ours to fix
+      not answering   TIMEOUTS_IN_A_ROW timeouts without a success, on TIMEOUT_HOSTS sites or more
+      down            fh_info's check (a tiny page) failed
+    Anything else is the page's — a 403, a script shell, robots.txt, a website ban, "aborted:
+    another won" — and passed over. No line in the log's tail: no state, "not used yet"."""
+    names = unlocker_order()
+    if not names:
+        return []
+    last: dict = {}
+    timeouts: dict = {n: [] for n in names}
+    for ts, tool, ident, msg in (_log_tail() if lines is None else lines):
+        if tool == "info":
+            for r in UNLOCK_INFO.finditer(msg):
+                last[r.group(1)] = {"ok": r.group(3) is None, "error": r.group(3), "secs": int(r.group(2)) / 1000 if r.group(2) else None, "at": ts}
+                timeouts.get(r.group(1), []).clear()
+            continue
+        if tool == "search":
+            continue
+        for r in UNLOCK_RESULT.finditer(msg):
+            n, why = r.group(2), (r.group(3) or "").strip()
+            if r.group(1) == "ok":
+                last[n] = {"ok": True, "error": None, "secs": None, "at": ts}
+                timeouts.get(n, []).clear()
+            elif ACCOUNT.match(why):
+                last[n] = {"ok": False, "error": re.sub(r"^unlocker ", "", why.split(" http")[0])[:70], "secs": None, "at": ts}
+            elif why.startswith("timeout") and n in timeouts:
+                host = re.sub(r"^https?://", "", msg.rsplit(" ", 1)[-1]).split("/")[0]
+                timeouts[n].append(host)
+                if len(timeouts[n]) >= TIMEOUTS_IN_A_ROW and len(set(timeouts[n])) >= TIMEOUT_HOSTS:
+                    last[n] = {"ok": False, "error": f"not answering: {len(timeouts[n])} timeouts in a row", "secs": None, "at": ts}
+    return _states(names, last, now or time.time())
 
 
 def own_stages() -> list[tuple[str, str, int]]:
@@ -814,15 +815,6 @@ def check_stages() -> list[dict]:
     with ThreadPoolExecutor(max_workers=len(stages)) as ex:
         return list(ex.map(_check_stage, stages))
 
-
-def check_unlockers() -> list[dict]:
-    """Every unlocker at once: three paid requests one after another took 5.4 s on live (2026-11-15)."""
-    from concurrent.futures import ThreadPoolExecutor
-    names = unlocker_order()
-    if not names:
-        return []
-    with ThreadPoolExecutor(max_workers=len(names)) as ex:
-        return list(ex.map(check_unlocker, names))
 
 
 def check_verify() -> dict:
@@ -886,6 +878,11 @@ def check_verify() -> dict:
         return {"configured": True, "provider": name, "model": model, "host": host, "ok": False, "secs": time.time() - t0, "error": f"HTTP {e.code}"}
     except Exception as e:
         return {"configured": True, "provider": name, "model": model, "host": host, "ok": False, "secs": time.time() - t0, "error": "timeout" if "timed out" in str(e) else str(e)[:60]}
+
+
+def ago(secs: float) -> str:
+    """"4 min ago", "3 h ago", "2 d ago"."""
+    return "just now" if secs < 60 else f"{secs / 60:.0f} min ago" if secs < 3600 else f"{secs / 3600:.0f} h ago" if secs < 86400 else f"{secs / 86400:.0f} d ago"
 
 
 def human(n: int) -> str:
@@ -1265,8 +1262,8 @@ class Ctl(App):
     }
     #status-bar { height: 16; background: transparent; }
     #status-divider { width: 1fr; height: 1; padding: 0 1; color: #4e4e4e; background: transparent; text-wrap: nowrap; text-overflow: clip; }
-    #status-row-server, #status-row-fh_verify_claim, #status-row-websearch, #status-row-1, #status-row-verify, #status-row-unlocker, #status-row-fetch, #status-row-playwright, #status-row-chrome, #status-row-2, #status-row-3, #status-row-doi, #status-row-4, #status-row-5, #status-row-url, #status-row-verdicts, #status-row-evid, #status-row-search { height: 1; background: transparent; }
-    #row-verify, #row-unlock, #row-websearch, #row-fetch, #row-playwright, #row-chrome { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
+    #status-row-problem, #status-row-server, #status-row-fh_verify_claim, #status-row-websearch, #status-row-1, #status-row-verify, #status-row-unlocker, #status-row-fetch, #status-row-playwright, #status-row-chrome, #status-row-2, #status-row-3, #status-row-doi, #status-row-4, #status-row-5, #status-row-url, #status-row-verdicts, #status-row-evid, #status-row-search { height: 1; background: transparent; }
+    #row-problem, #row-verify, #row-unlock, #row-websearch, #row-fetch, #row-playwright, #row-chrome { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-doi { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-pmid, #row-dailymed { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
     #row-nct, #row-url, #row-verdicts, #row-evid, #row-search { width: 1fr; height: 1; padding: 0 1; background: transparent; text-wrap: nowrap; text-overflow: ellipsis; }
@@ -1371,6 +1368,10 @@ class Ctl(App):
             yield Static(socket.gethostname().split(".")[0], id="host")
         yield LibLog(id="output", highlight=True, max_lines=MAX_LINES, auto_scroll=True)
         with Vertical(id="status-bar"):
+            # What is wrong, on a line of its own above the server line — only while the server is degraded;
+            # on the server line it pushed the MCP count, the port and the version out of view.
+            with Horizontal(id="status-row-problem"):
+                yield Static("", id="row-problem")
             with Horizontal(id="status-row-server"):
                 # The first line under the log: this library's servers — how many MCP servers
                 # run on it, then the TUI's /status port when it serves one — and, at the right
@@ -1431,7 +1432,7 @@ class Ctl(App):
         shown = 0
         for child in bar.children:
             row = f"#{child.id}"
-            child.display = row == "#status-row-server" or (not self._folded and row not in self._off_rows)
+            child.display = bool(getattr(self, "_problems", None)) if row == "#status-row-problem" else row == "#status-row-server" or (not self._folded and row not in self._off_rows)
             shown += 1 if child.display else 0
         bar.styles.height = shown
         for w in ("#sep-items", "#items"):
@@ -1671,9 +1672,10 @@ class Ctl(App):
             f_lib = ex.submit(guard(lambda: scan_library(FH_EVIDENCE_DIR), lambda e: {"error": e}))
             f_disk = ex.submit(guard(disk, lambda e: None))
             f_ver = ex.submit(guard(check_verify, lambda e: {"configured": True, "ok": False, "error": e}))
-            f_unl = ex.submit(guard(check_unlockers, lambda e: [{"provider": "?", "ok": False, "error": e}]))
+            lines = _log_tail()   # one read for the unlockers and the search providers: their state comes from the log, not from a paid request
+            f_unl = ex.submit(guard(lambda: check_unlockers(lines=lines), lambda e: [{"provider": "?", "ok": False, "error": e, "problem": True}]))
             f_stg = ex.submit(guard(check_stages, lambda e: [{"name": "?", "up": False, "error": e}]))
-            f_web = ex.submit(guard(check_searchers, lambda e: [{"provider": "?", "ok": False, "error": e}]))
+            f_web = ex.submit(guard(lambda: check_searchers(lines=lines), lambda e: [{"provider": "?", "ok": False, "error": e, "problem": True}]))
             res = f_lib.result()
             res["took"] = time.time() - t0
             res["disk"], res["verify"], res["unlockers"], res["stages"] = f_disk.result(), f_ver.result(), f_unl.result(), f_stg.result()
@@ -1704,11 +1706,11 @@ class Ctl(App):
             if vr.get("secs") is not None:
                 w.append(f" {vr['secs'] * 1000:.0f} ms", style=C_MUTE)
         self.query_one("#row-verify", Static).update(w)
-        # The unlocker below the decider: the live check (at most every 15 minutes, it
-        # costs a request) — and an open alert from the log wins, e.g. an HTTP 407 when
-        # a download hit an IP Bright Data does not allow.
+        # The unlocker below the decider: how each last did, from the log (check_unlockers) — and
+        # an open alert from the log wins, e.g. an HTTP 407 when a download hit an IP Bright
+        # Data does not allow.
         urs = res.get("unlockers") or []
-        # A live check that worked clears an older alert of that unlocker: the
+        # A download or check that worked clears an older alert of that unlocker: the
         # refusal (an IP not allowed, a used-up quota) was fixed since (2026-11-13:
         # a cleared denylist still showed the morning's 407 for hours).
         for ur in urs:
@@ -1726,14 +1728,19 @@ class Ctl(App):
             alert = next((a for (h, k), a in self._alerts.open.items() if k == name), None)
             if alert:
                 u.append(alert["message"].replace(f"{name}: ", "", 1)[:60], style=C_FAIL)
+            elif ur.get("ok") is None:      # no line of it in the log's tail: no state, and no paid check to get one
+                u.append("not used yet", style=C_MUTE)
+                continue
             elif ur.get("ok"):
                 u.append("up", style=C_OK)
             else:
-                u.append((ur.get("error") or "down")[:60], style=C_FAIL)
+                u.append((ur.get("error") or "down")[:60], style=C_FAIL if ur.get("problem") else C_MUTE)
             if ur.get("secs") is not None:
                 u.append(f" {ur['secs'] * 1000:.0f} ms", style=C_MUTE)
+            if ur.get("age") is not None:
+                u.append(f" · {ago(ur['age'])}", style=C_MUTE)
         self.query_one("#row-unlock", Static).update(u)
-        # fh_web_search's providers, as the unlockers: up or what failed, the time of the last check
+        # fh_web_search's providers: how each last answered a real search (from the log), and how long ago
         w = Text(); w.append(f"{'web search':<10} ", style=C_TOOL)
         ws = res.get("searchers") or []
         if not ws:
@@ -1742,9 +1749,14 @@ class Ctl(App):
             if i:
                 w.append("  ·  ", style=C_MUTE)
             w.append(sr.get("provider", "?")).append(" ")
-            w.append("up", style=C_OK) if sr.get("ok") else w.append((sr.get("error") or "down")[:60], style=C_FAIL)
+            if sr.get("ok") is None:      # nobody searched with it in the log's tail: no state, and no paid check to get one
+                w.append("no search yet", style=C_MUTE)
+                continue
+            w.append("up", style=C_OK) if sr.get("ok") else w.append((sr.get("error") or "failed")[:60], style=C_FAIL if sr.get("problem") else C_MUTE)
             if sr.get("secs") is not None:
                 w.append(f" {sr['secs'] * 1000:.0f} ms", style=C_MUTE)
+            if sr.get("age") is not None:
+                w.append(f" · {ago(sr['age'])}", style=C_MUTE)
         self.query_one("#row-websearch", Static).update(w)
         # Our own stage hosts below, one line per kind: up or down, checked on every scan (free).
         sts = res.get("stages") or []
@@ -2114,14 +2126,21 @@ class Ctl(App):
         except Exception as e:  # pragma: no cover
             snap = {"status": "degraded", "problems": [f"snapshot failed: {e}"]}
         self._status_json = json.dumps(snap, separators=(",", ":")).encode()
-        # The same verdict first on the server line: "healthy" green, else "degraded" red and what is
-        # wrong — the first problem in words, "+2 more" for the rest (all of them in /status).
-        pr = snap.get("problems") or []
-        h = Text("healthy", style=C_OK) if snap.get("status") == "ok" else \
-            Text("degraded", style=C_FAIL).append(f": {pr[0] if pr else '?'}" + (f" +{len(pr) - 1} more" if len(pr) > 1 else ""), style=C_MUTE)
+        # The same verdict first on the server line, one word: "healthy" green or "degraded" red. What is
+        # wrong stands on its own line above (all of it in /status too), shown only while degraded, folded or not.
+        pr = [] if snap.get("status") == "ok" else (snap.get("problems") or ["?"])
+        h = Text("healthy", style=C_OK) if not pr else Text("degraded", style=C_FAIL)
+        line = Text(f"{'problem':<10} ", style=C_FAIL)
+        for i, x in enumerate(pr):
+            line.append("  ·  " if i else "", style=C_MUTE).append(str(x))
         try:
             self.query_one("#health", Static).update(h)
             self.query_one("#sep-health", Static).display = True
+            self.query_one("#row-problem", Static).update(line)
+            if bool(pr) != bool(getattr(self, "_problems", None)):
+                self._problems = pr
+                self._layout_status()
+            self._problems = pr
         except Exception:
             pass   # before compose
 
@@ -2139,8 +2158,8 @@ class Ctl(App):
         urs = res.get("unlockers") or []
         if vr.get("configured") and not vr.get("ok"):
             problems.append(f"verify model: {vr.get('error') or 'no answer'}")
-        problems += [f"unlocker {ur.get('provider')}: {ur.get('error') or 'no answer'}" for ur in urs if not ur.get("ok")]
-        problems += [f"web search {sr.get('provider')}: {sr.get('error') or 'no answer'}" for sr in (res.get("searchers") or []) if not sr.get("ok")]
+        problems += [f"unlocker {ur.get('provider')}: {ur.get('error') or 'no answer'}" for ur in urs if ur.get("problem")]
+        problems += [f"web search {sr.get('provider')}: {sr.get('error') or 'no answer'}" for sr in (res.get("searchers") or []) if sr.get("problem")]
         sts = res.get("stages") or []
         problems += [f"stage {st.get('name')}: {st.get('error') or 'down'}" for st in sts if not st.get("up")]
         dk = res.get("disk")
@@ -2180,7 +2199,7 @@ class Ctl(App):
                          "since": min((s.get("started", "") for s in res.get("servers") or []), default=None)},
             "verify": {"configured": bool(vr.get("configured")), "ok": bool(vr.get("ok")), "model": vr.get("model"), "host": vr.get("host"),
                        "ms": round(vr["secs"] * 1000) if vr.get("secs") is not None else None, "error": vr.get("error")},
-            "unlockers": [{"provider": ur.get("provider"), "ok": bool(ur.get("ok")), "ms": round(ur["secs"] * 1000) if ur.get("secs") is not None else None,
+            "unlockers": [{"provider": ur.get("provider"), "ok": not ur.get("problem"), "state": "up" if ur.get("ok") else "unused" if ur.get("ok") is None else "failed", "ms": round(ur["secs"] * 1000) if ur.get("secs") is not None else None,
                            "error": ur.get("error"), "checked": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ur["at"])) if ur.get("at") else None} for ur in urs],
             "stages": [{"name": st.get("name"), "up": bool(st.get("up")), "ms": round(st["secs"] * 1000) if st.get("secs") is not None else None, "error": st.get("error")} for st in sts],
         }

@@ -11,13 +11,15 @@ export type Paper = {
   pmcid: string | null;
   doi: string | null;
   headLine: string;      // the metadata line under the title in every .md
+  abstract?: string | null;   // the stored abstract's text, where there is one: a full text is checked against it (#7)
+  doiLink?: string | null;    // where the DOI leads, for a DOI only doi.org knows (not PubMed, not Crossref): the doi-link tier's page
 };
 
 export type TierHit = {
   ok: true;
   tier: string;
-  format: "xml" | "html" | "pdf";
-  raw: string | Buffer;  // the original, stored verbatim as -fulltext.<format>
+  format: "xml" | "html" | "pdf" | "md";   // md: the document's own Markdown source, named by its page (doi-link)
+  raw: string | Buffer;  // the original, stored verbatim as -fulltext.<format> (md: -fulltext.source.md)
   md: string;            // the checked Markdown, stored as -fulltext.md
   version: "published" | "accepted_manuscript" | "preprint";
 };

@@ -218,7 +218,9 @@ export function getAspects(lib: string, evid: string, opts: { section?: string; 
 // (it shows us where a list or the picking is off, and a later picking may fill it) and is named nowhere.
 export function shownAspects(db: Db): ItemRow[] {
   if (!db.prepare("SELECT name FROM sqlite_master WHERE name = 'item_picks'").get()) return [];
-  const withArticle = new Set((db.prepare("SELECT DISTINCT kind || char(0) || item AS k FROM item_picks").all() as { k: string }[]).map((x) => x.k));
+  // Two columns, joined here: Node 22 cuts a text the database returns at a NUL character, so a key joined with
+  // char(0) in SQL came back as the kind alone and every map read as empty there (found by CI on Node 22, 2026-11-26).
+  const withArticle = new Set((db.prepare("SELECT DISTINCT kind, item FROM item_picks").all() as { kind: string; item: string }[]).map((x) => `${x.kind}\u0000${x.item}`));
   return itemRows(db).filter((x) => withArticle.has(`${x.kind}\u0000${x.item}`));
 }
 

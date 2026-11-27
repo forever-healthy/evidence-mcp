@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/badge/Version-1.1.0-green.svg)
+![Version](https://img.shields.io/badge/Version-1.1.10-green.svg)
 ![License MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 [![Forever Healthy](https://img.shields.io/badge/(c)_2026-Forever_Healthy-573D7D.svg)](https://forever-healthy.org)
 [![npm](https://img.shields.io/badge/npm-evidence--mcp-cb3837.svg)](https://www.npmjs.com/package/evidence-mcp)
@@ -32,7 +32,7 @@ Released under the MIT license to empower, simplify, and speed up medical litera
 - Local caching of metadata, abstract, and full text
 - Token-saving partial reads: agents read the outline, then pick only the sections they need
 - Full text fetched automatically wherever it can be obtained
-- Parallel discovery cascade for full text (PMC, Europe PMC, TDM, Unpaywall, OpenAlex, CORE, institutional proxy)
+- Parallel discovery cascade for full text (PMC, Europe PMC, TDM, Unpaywall, OpenAlex, CORE, the DOI's own page for DataCite DOIs, institutional proxy)
 - Support for Elsevier and Wiley TDM
 - Automatic conversion (HTML, XML, PDF) to token-optimized Markdown
 

@@ -10,7 +10,7 @@ import { miss, type Paper, type RunContext, type Tier, type TierHit, type TierMi
 // Attempts are "<tier> (<reason>) <date>". A permanent reason (the paper is
 // simply not there) is never retried; a transient one (network, rate limit,
 // a wall) is retried once the cooldown has passed, replacing the old entry.
-const PERMANENT = /^(no pmcid|no doi|no pmid|no pmid or doi|no body|closed|no oa copy|no free copy|not in core|no full text|xml without body|template has no placeholder|title missing|title not in text|no methods\/results|no article body|scanned pdf|not a pdf|only copies already tried|only pmc copies|nothing located|unknown content|no text-mining links|needs [a-z/]+ token)/i;
+const PERMANENT = /^(no pmcid|no doi|no pmid|no pmid or doi|no body|closed|no oa copy|no free copy|not in core|no full text|xml without body|template has no placeholder|title missing|title not in text|supplementary material|another document|no methods\/results|no article body|scanned pdf|not a pdf|only copies already tried|only pmc copies|nothing located|unknown content|no text-mining links|needs [a-z/]+ token)/i;
 // Blocked by policy: a browser challenge not cleared, or Bright Data's "empty
 // response" (the target refused it too). Final by default — the same method
 // tomorrow ends the same way; FH_RETRY_BLOCKED=true makes them

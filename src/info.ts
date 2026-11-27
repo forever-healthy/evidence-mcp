@@ -11,6 +11,7 @@ import type { Source } from "./env.js";
 import { isLocal, verifyConfig, verifyProblems } from "./verify/config.js";
 import { evidenceMapEnabled } from "./evidencemap.js";
 import { evidEnabled } from "./evid.js";
+import { dataciteInfo, dataciteProblems } from "./datacite.js";
 import { evmapModels, type EvmapModels } from "./rank.js";
 
 // fh_info(): the configuration (libraryInfo) and the library's counts (libraryCounts) — entries by
@@ -35,11 +36,12 @@ export type Info = {
   download: { fetch: boolean; fetch_proxy: FetchProxy | null; playwright: { version: string; servers: BrowserStage[] }; chrome: BrowserStage[]; unlocker: boolean };   // playwright.version: what every Playwright server must run  // playwright: the version the package pins — a ws:// browser server must run the same
   // fh_verify_claim's decision model; null: the tool answers error. ok, ms and
   // error come from one tiny request when fh_info is called.
-  verify: { provider: string; model: string; base_url: string; local: boolean; ok?: boolean; ms?: number; error?: string | null } | null;
+  verify: { provider: string; model: string; base_url: string; local: boolean; ok?: boolean; ms?: number; error?: string | null; checked_secs_ago?: number } | null;
   evid?: { entries: number; evidence_maps: number };   // only when FH_EVID_ENABLED: the EVIDs, and how many hold an evidence map
   evidence_map?: EvmapModels;   // only when FH_EVMAP_ENABLED: the screening and ranking models
+  datacite?: NonNullable<ReturnType<typeof dataciteInfo>>;   // only when FH_DATACITE_ENABLED and its account is set: the system (test or production) and the account the fh_datacite tools use
   web_search?: string[];   // the providers behind fh_web_search (every one with a key); absent: no provider key, the tool is not offered
-  unlockers: { provider: string; ok?: boolean; ms?: number; error?: string | null }[];
+  unlockers: { provider: string; ok?: boolean; ms?: number; error?: string | null; checked_secs_ago?: number }[];
   stages: { name: string; host: string; port: number; up?: boolean; ms?: number; error?: string | null }[];   // our own stage hosts (fetch proxy, Playwright, Chrome) and whether each answers (filled by fh_info)   // the last download stages in the order tried, and whether each answers (filled by fh_info)
 };
 
@@ -81,11 +83,12 @@ function evidCounts(lib: string): { entries: number; evidence_maps: number } {
 export function libraryInfo(libraryDir: string, host: string, tiers: ResolvedTiers = resolveTiers()): Info {
   const info: Info = {
     evidence_dir: libraryDir, host,
-    tiers: tiers.all, config: { ...settings(), problems: [...tiers.problems, ...verifyProblems(), ...(evidenceMapEnabled() ? evmapModels().problems : [])], sources: sources() },
+    tiers: tiers.all, config: { ...settings(), problems: [...tiers.problems, ...verifyProblems(), ...(evidenceMapEnabled() ? evmapModels().problems : []), ...dataciteProblems()], sources: sources() },
     download: downloadInfo(),
     verify: verifyInfo(),
     ...(evidEnabled() ? { evid: evidCounts(libraryDir) } : {}),
     ...(evidenceMapEnabled() ? { evidence_map: evmapModels().models } : {}),
+    ...(dataciteInfo() ? { datacite: dataciteInfo()! } : {}),
     ...(webSearchConfigured() ? { web_search: webSearchConfig().map((c) => c.provider) } : {}),
     unlockers: unlockers().map((provider) => ({ provider })),
     stages: ownStages(),
